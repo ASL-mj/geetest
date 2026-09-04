@@ -29,6 +29,8 @@ import {
 import { type ReactNode, useState } from 'react';
 
 import './App.css';
+import { AdminPage } from './AdminPage';
+import { AuthPage, PublicDocs, PublicHome } from './PublicPages';
 
 type PageId = 'dashboard' | 'keys' | 'debug' | 'usage' | 'calls' | 'docs' | 'account';
 type StatusTone = 'success' | 'warning' | 'danger' | 'neutral' | 'info';
@@ -338,9 +340,37 @@ function CreateKeyDialog({ onClose }: { onClose: () => void }) {
 }
 
 export function App() {
+  const [surface, setSurface] = useState<'public' | 'console' | 'admin'>('public');
+  const [publicView, setPublicView] = useState<'home' | 'auth' | 'docs'>('home');
   const [activePage, setActivePage] = useState<PageId>('dashboard');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const activeTitle = pageTitles[activePage];
+
+  if (surface === 'public') {
+    if (publicView === 'auth') {
+      return (
+        <AuthPage
+          onBack={() => setPublicView('home')}
+          onDocs={() => setPublicView('docs')}
+          onSuccess={() => setSurface('console')}
+        />
+      );
+    }
+    if (publicView === 'docs') {
+      return <PublicDocs onBack={() => setPublicView('home')} onStart={() => setPublicView('auth')} />;
+    }
+    return (
+      <PublicHome
+        onAdmin={() => setSurface('admin')}
+        onDocs={() => setPublicView('docs')}
+        onStart={() => setPublicView('auth')}
+      />
+    );
+  }
+
+  if (surface === 'admin') {
+    return <AdminPage onExit={() => setSurface('public')} />;
+  }
 
   const renderPage = () => {
     switch (activePage) {
