@@ -56,6 +56,14 @@ func GetAdminByID(ctx context.Context, q Querier, id uuid.UUID) (AdminUser, erro
 	return admin, nil
 }
 
+// CountAdmins reports how many operator accounts exist; startup bootstrap
+// only runs when this is zero so re-runs never overwrite operator passwords.
+func CountAdmins(ctx context.Context, q Querier) (int, error) {
+	var count int
+	err := q.QueryRow(ctx, `SELECT count(*) FROM admin_users`).Scan(&count)
+	return count, err
+}
+
 // UpsertAdmin creates or refreshes the bootstrap operator; the password hash
 // is only replaced on re-bootstrap.
 func UpsertAdmin(ctx context.Context, q Querier, admin AdminUser) error {

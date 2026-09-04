@@ -37,6 +37,9 @@ describe('App', () => {
   beforeEach(() => {
     accountMock.mockReset();
     accountMock.mockRejectedValue(new Error('session required'));
+    // jsdom shares window.history across tests; every test starts from the
+    // same public home route.
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders the public home as the default entry view', async () => {
@@ -48,10 +51,11 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /CDK 激活 \/ 登录/ })).toBeInTheDocument();
   });
 
-  it('shows the activation form when the CDK entry is opened', async () => {
+  it('routes the activation form at /activate and reflects the URL', async () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: /CDK 激活 \/ 登录/ }));
+    expect(window.location.pathname).toBe('/activate');
     expect(screen.getByRole('heading', { name: '使用 CDK 进入平台' })).toBeInTheDocument();
     expect(screen.getByLabelText('CDK 编码')).toBeInTheDocument();
     // Activation without a network mock stays on the form and surfaces an error.
@@ -60,25 +64,27 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
   });
 
-  it('opens public docs from the home page', async () => {
+  it('routes public docs at /docs from the home page', async () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: /查看 API 文档/ }));
     expect(await screen.findByRole('heading', { name: '接入文档' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/docs');
     expect(screen.getByText('CaptchaFlow API V1')).toBeInTheDocument();
     expect(screen.queryByText(/GeeTest/i)).not.toBeInTheDocument();
   });
 
-  it('opens the admin login gate instead of the console preview', async () => {
+  it('routes the admin login gate at /admin', async () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: '管理员入口' }));
+    expect(window.location.pathname).toBe('/admin');
     expect(await screen.findByRole('heading', { name: '管理员登录' })).toBeInTheDocument();
     expect(screen.getByLabelText('用户名')).toBeInTheDocument();
     expect(screen.getByLabelText('密码')).toBeInTheDocument();
   });
 
-  it('enters the console directly when a session cookie is valid', async () => {
+  it('serves console deep links directly when a session cookie is valid', async () => {
     accountMock.mockResolvedValue({
       success: true,
       request_id: 'req_test',
@@ -89,9 +95,15 @@ describe('App', () => {
         },
       },
     });
+    window.history.replaceState({}, '', '/console/dashboard');
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: '控制台概览' })).toBeInTheDocument();
     expect(await screen.findByText('剩余额度')).toBeInTheDocument();
+
+    // Sidebar navigation updates the URL without a full reload.
+    fireEvent.click(screen.getByRole('button', { name: '用量统计' }));
+    expect(await screen.findByRole('heading', { name: '用量统计', level: 1 })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/console/usage');
   });
 });

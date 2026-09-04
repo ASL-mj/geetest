@@ -34,7 +34,7 @@ make api-seed      # insert a local demo CDK (CAPTCHA-DEMO-2026)
 make api-run       # serve the API on http://localhost:8000
 ```
 
-Provision an operator account (password comes from the environment):
+Provision an operator account. On first startup the API creates it automatically from `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD` in `.env` (only when `admin_users` is still empty, and the password is never logged). A manual re-bootstrap is also available:
 
 ```bash
 ADMIN_BOOTSTRAP_USERNAME=admin ADMIN_BOOTSTRAP_PASSWORD=<secret> make admin-bootstrap
@@ -70,6 +70,6 @@ pnpm build        # production build to dist/
 
 ## Deployment
 
-`deploy/compose.yml` adds the API service on top of the PostgreSQL/Redis development stack. The API container builds from `apps/api/Dockerfile`, reads runtime configuration from the root `.env`, and exposes `:8000`. Serve the built web bundle behind a TLS-terminating reverse proxy that forwards `/v1`, `/admin`, and `/healthz` to the API. Production `APP_ENV=production` rejects placeholder secrets, localhost addresses, and `example.com` URLs at startup.
+`deploy/compose.yml` adds the API service on top of the PostgreSQL/Redis development stack. The API image (built from the repo root so the web console is compiled and embedded into the Go binary) serves both the SPA and the JSON API on `:8000` — history routes like `/console/keys` or `/admin/users` survive hard refreshes via an index.html fallback, while `/v1/*`, `/admin/v1/*`, and `/healthz` always answer with the JSON envelope. Production `APP_ENV=production` rejects placeholder secrets, localhost addresses, and `example.com` URLs at startup.
 
 Do not put runtime secrets, API Keys, CDKs, database dumps, or solver credentials into this repository.

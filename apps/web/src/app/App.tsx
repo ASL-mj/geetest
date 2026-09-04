@@ -27,6 +27,7 @@ import './App.css';
 import { AdminPage } from './AdminPage';
 import { AuthPage, PublicDocs, PublicHome } from './PublicPages';
 import { ApiError, api, type APIKey, type CallRecord, type CDKSummary, type UsageReport } from '../lib/api';
+import { consolePath, navigate, useRoute, type ConsolePage } from '../lib/router';
 import { callStatusMeta, cdkStatusMeta, formatCount, formatTime, keyStatusMeta, type StatusTone } from '../lib/status';
 
 type PageId = 'dashboard' | 'keys' | 'debug' | 'usage' | 'calls' | 'docs' | 'account';
@@ -592,65 +593,80 @@ function DocsPage() {
 }
 
 export function App() {
-  const [mode, setMode] = useState<'loading' | 'guest' | 'console' | 'admin'>('loading');
-  const [publicView, setPublicView] = useState<'home' | 'auth' | 'docs'>('home');
-  const [activePage, setActivePage] = useState<PageId>('dashboard');
+  // The URL is the single source of truth: refresh, back/forward and deep
+  // links all resolve through the history router.
+  const route = useRoute();
   const [sessionEpoch, setSessionEpoch] = useState(0);
-  const activeTitle = pageTitles[activePage];
+  // Session probe result for console routes: null = still checking. Admin
+  // routes manage their own login gate inside AdminPage.
+  const [consoleSession, setConsoleSession] = useState<'checking' | 'guest' | 'authenticated'>('checking');
 
-  // Probe the session once on mount: a valid cookie opens the console.
+  const isConsoleRoute = route.name === 'console';
+
+  // Probe the session whenever a console route is shown or the session
+  // changes (activation, logout). Guest pages render without probing.
   useEffect(() => {
+    if (!isConsoleRoute) return;
     let alive = true;
+    setConsoleSession('checking');
     void (async () => {
       try {
         await api.account();
-        if (alive) setMode('console');
+        if (alive) setConsoleSession('authenticated');
       } catch {
-        if (alive) setMode('guest');
+        if (alive) setConsoleSession('guest');
       }
     })();
     return () => { alive = false; };
-  }, [sessionEpoch]);
+  }, [isConsoleRoute, sessionEpoch]);
 
-  if (mode === 'loading') {
-    return <div className="public-shell" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><div className="empty-state"><RefreshCw aria-hidden="true" size={28} /><strong>正在进入平台…</strong></div></div>;
-  }
-
-  if (mode === 'guest') {
-    if (publicView === 'auth') {
-      return (
-        <AuthPage
-          onBack={() => setPublicView('home')}
-          onDocs={() => setPublicView('docs')}
-          onSuccess={() => { setMode('console'); setSessionEpoch((value) => value + 1); }}
-        />
-      );
-    }
-    if (publicView === 'docs') {
-      return <PublicDocs onBack={() => setPublicView('home')} onStart={() => setPublicView('auth')} />;
-    }
+  if (route.name === 'activate') {
     return (
-      <PublicHome
-        onAdmin={() => setMode('admin')}
-        onDocs={() => setPublicView('docs')}
-        onStart={() => setPublicView('auth')}
+      <AuthPage
+        onBack={() => navigate('/')}
+        onDocs={() => navigate('/docs')}
+        onSuccess={() => { setSessionEpoch((value) => value + 1); navigate(consolePath('dashboard')); }}
       />
     );
   }
-
-  if (mode === 'admin') {
-    return <AdminPage onExit={() => setMode('guest')} />;
+  if (route.name === 'docs') {
+    return <PublicDocs onBack={() => navigate('/')} onStart={() => navigate('/activate')} />;
   }
+  if (route.name === 'home') {
+    return (
+      <PublicHome
+        onAdmin={() => navigate('/admin')}
+        onDocs={() => navigate('/docs')}
+        onStart={() => navigate('/activate')}
+      />
+    );
+  }
+  if (route.name === 'admin') {
+    return <AdminPage initialSection={route.section} onExit={() => navigate('/')} />;
+  }
+
+  // Console route with the session still being probed.
+  if (consoleSession === 'checking') {
+    return <div className="public-shell" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><div className="empty-state"><RefreshCw aria-hidden="true" size={28} /><strong>正在进入平台…</strong></div></div>;
+  }
+  // Guest users on a console URL are sent to activation; replace keeps the
+  // guarded URL out of history so back returns to the previous public page.
+  if (consoleSession === 'guest') {
+    return <AuthPage onBack={() => navigate('/')} onDocs={() => navigate('/docs')} onSuccess={() => { setSessionEpoch((value) => value + 1); navigate(consolePath('dashboard'), true); }} />;
+  }
+
+  const activePage: ConsolePage = route.page;
+  const activeTitle = pageTitles[activePage];
 
   const renderPage = () => {
     switch (activePage) {
-      case 'dashboard': return <Dashboard goTo={setActivePage} />;
+      case 'dashboard': return <Dashboard goTo={(page) => navigate(consolePath(page))} />;
       case 'keys': return <KeysPage onChanged={() => setSessionEpoch((value) => value + 1)} />;
       case 'debug': return <DebugPage />;
       case 'usage': return <UsagePage />;
       case 'calls': return <CallsPage />;
       case 'docs': return <DocsPage />;
-      case 'account': return <AccountPage onLogout={() => { setMode('guest'); setPublicView('home'); setSessionEpoch((value) => value + 1); }} />;
+      case 'account': return <AccountPage onLogout={() => { setSessionEpoch((value) => value + 1); navigate('/'); }} />;
     }
   };
 
@@ -662,14 +678,14 @@ export function App() {
         <nav aria-label="主导航">
           {navigation.map((item) => {
             const Icon = item.icon;
-            return <button className={`nav-item ${activePage === item.id ? 'nav-item--active' : ''}`} key={item.id} onClick={() => setActivePage(item.id)} type="button"><Icon aria-hidden="true" size={18} /><span>{item.label}</span></button>;
+            return <button className={`nav-item ${activePage === item.id ? 'nav-item--active' : ''}`} key={item.id} onClick={() => navigate(consolePath(item.id))} type="button"><Icon aria-hidden="true" size={18} /><span>{item.label}</span></button>;
           })}
         </nav>
         <div className="sidebar__bottom"><div className="service-mini"><span><Activity aria-hidden="true" size={15} />服务运行正常</span><small>API 可用</small></div><button className="sidebar-help" type="button"><CreditCard aria-hidden="true" size={17} />服务与账单</button></div>
       </aside>
       <div className="app-main">
         <header className="topbar"><div className="breadcrumb"><span>用户控制台</span><ChevronRight aria-hidden="true" size={15} /><b>{activeTitle.title}</b></div><div className="topbar__actions"><StatusPill tone="success">平台服务正常</StatusPill></div></header>
-        <main className="content"><div className="page-title"><div><p className="eyebrow">CAPTCHA SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{(activePage === 'dashboard' || activePage === 'keys') && <button className="primary-button page-title__button" onClick={() => setActivePage('keys')} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
+        <main className="content"><div className="page-title"><div><p className="eyebrow">CAPTCHA SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{(activePage === 'dashboard' || activePage === 'keys') && <button className="primary-button page-title__button" onClick={() => navigate(consolePath('keys'))} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
       </div>
     </div>
   );

@@ -42,6 +42,7 @@ func main() {
 	limiter := ratelimit.New(ctx, settings)
 	gateway := solver.NewGateway(settings)
 	services := service.NewServices(pool, settings)
+	bootstrapAdmin(ctx, services)
 	solveService := service.NewSolveService(pool, gateway, limiter, settings.SessionSecret)
 	handler := httpapi.NewRouter(services, solveService)
 
@@ -66,6 +67,30 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("captchaflow api stopped")
+}
+
+// bootstrapAdmin creates the operator account on first startup when
+// ADMIN_BOOTSTRAP_USERNAME/ADMIN_BOOTSTRAP_PASSWORD are configured and the
+// admin_users table is still empty. The password is never logged.
+func bootstrapAdmin(ctx context.Context, services *service.Services) {
+	if settings := services.Settings; settings.AdminUsername == "" || settings.AdminPassword == "" {
+		slog.Warn("admin account not configured; set ADMIN_BOOTSTRAP_USERNAME and ADMIN_BOOTSTRAP_PASSWORD (or run `make admin-bootstrap`)")
+		return
+	}
+	count, err := store.CountAdmins(ctx, services.Pool)
+	if err != nil {
+		slog.Error("count admin users failed", "error", err)
+		os.Exit(1)
+	}
+	if count > 0 {
+		return
+	}
+	result, appErr := services.BootstrapAdmin(ctx)
+	if appErr != nil {
+		slog.Error("admin bootstrap failed", "code", appErr.Code)
+		os.Exit(1)
+	}
+	slog.Info("admin account bootstrapped", "username", result.Username)
 }
 
 // resolveEnvFile prefers an explicit path, then the repository root .env,

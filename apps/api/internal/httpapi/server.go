@@ -3,14 +3,21 @@
 package httpapi
 
 import (
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/service"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
+
+//go:embed all:web
+var webFS embed.FS
 
 // Server carries the shared dependencies for all handlers.
 type Server struct {
@@ -21,6 +28,8 @@ type Server struct {
 // NewRouter builds the V1 route table. Go 1.22+ ServeMux patterns provide
 // method matching and path parameters. The solve endpoint requires its own
 // service; passing nil omits it (useful for focused test routers).
+// When a web build is embedded (deploy images), unmatched GETs fall back to
+// the SPA so history routes like /console/keys survive a hard refresh.
 func NewRouter(services *service.Services, solve *service.SolveService) http.Handler {
 	server := &Server{services: services, solve: solve}
 	mux := http.NewServeMux()
@@ -55,7 +64,57 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("GET /admin/v1/audit-logs", server.requireAdminAny(server.handleAdminListAuditLogs))
 	mux.HandleFunc("GET /admin/v1/solver-health", server.requireAdminAny(server.handleAdminSolverHealth))
 
+	// Embedded web console (production image). Serving is skipped entirely
+	// when apps/api/web is empty, so local/test routers behave as before.
+	if spa := newSPAHandler(); spa != nil {
+		mux.HandleFunc("GET /", spa)
+	}
+
 	return mux
+}
+
+// newSPAHandler returns a handler serving the embedded web build with
+// history-mode fallback, or nil when no build is embedded.
+func newSPAHandler() http.HandlerFunc {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		return nil
+	}
+	return spaHandlerFor(sub)
+}
+
+func spaHandlerFor(files fs.FS) http.HandlerFunc {
+	entries, err := fs.ReadDir(files, ".")
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	fileServer := http.FileServerFS(files)
+	index, indexErr := fs.ReadFile(files, "index.html")
+	if indexErr != nil {
+		return nil
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		// API namespaces always answer with the JSON envelope, never HTML.
+		if isAPIPath(r.URL.Path) {
+			writeApplicationError(w, service.ErrNotFound())
+			return
+		}
+		// Serve real assets by extension; everything else gets index.html so
+		// SPA routes like /console/keys or /admin render on hard refresh.
+		if path.Ext(r.URL.Path) != "" {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(index)
+	}
+}
+
+// isAPIPath reports whether a request path belongs to the platform API
+// surface (which must never fall back to the web console). /admin itself is
+// an SPA route; only the /admin/v1 API namespace is excluded.
+func isAPIPath(p string) bool {
+	return p == "/healthz" || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/admin/v1/")
 }
 
 // handleHealthz is a public liveness probe; it must not check the solver.

@@ -14,9 +14,8 @@ import {
 import { useEffect, useState } from 'react';
 
 import { adminApi, ApiError, type AdminAuditEntry, type AdminBatch, type AdminCdk, type AdminDashboard, type AdminUser } from '../lib/api';
+import { adminPath, navigate, useRoute, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
-
-type AdminSection = 'overview' | 'batches' | 'cdks' | 'users' | 'audit' | 'health';
 
 const adminNavigation: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: '数据概览', icon: LayoutDashboard },
@@ -409,8 +408,11 @@ function AdminLoginGate({ onAuthenticated }: { onAuthenticated: () => void }) {
   );
 }
 
-export function AdminPage({ onExit }: { onExit: () => void }) {
-  const [section, setSection] = useState<AdminSection>('overview');
+export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSection; onExit: () => void }) {
+  // Section lives in the URL (/admin/overview, /admin/users, …) so refresh
+  // and deep links land on the same management view.
+  const route = useRoute();
+  const section: AdminSection = route.name === 'admin' ? route.section : (initialSection ?? 'overview');
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const current = adminNavigation.find((item) => item.id === section) ?? adminNavigation[0];
 
@@ -439,7 +441,7 @@ export function AdminPage({ onExit }: { onExit: () => void }) {
           {adminNavigation.map((item) => {
             const Icon = item.icon;
             return (
-              <button className={section === item.id ? 'admin-nav-item admin-nav-item--active' : 'admin-nav-item'} key={item.id} onClick={() => setSection(item.id)} type="button">
+              <button className={section === item.id ? 'admin-nav-item admin-nav-item--active' : 'admin-nav-item'} key={item.id} onClick={() => navigate(adminPath(item.id))} type="button">
                 <Icon aria-hidden="true" size={16} />{item.label}
               </button>
             );

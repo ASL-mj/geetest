@@ -6,9 +6,11 @@ export default defineConfig({
   server: {
     proxy: {
       // Same-origin dev proxy: session cookies stay first-party and the API
-      // never needs CORS for local development.
+      // never needs CORS for local development. Only the /admin/v1 API
+      // namespace is proxied — /admin, /console/... are SPA routes that must
+      // hit Vite's index.html fallback instead of the backend.
       '/v1': 'http://localhost:8000',
-      '/admin': 'http://localhost:8000',
+      '/admin/v1': 'http://localhost:8000',
       '/healthz': 'http://localhost:8000',
     },
   },

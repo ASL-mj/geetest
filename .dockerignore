@@ -1,0 +1,9 @@
+# Keep the image build lean and free of secrets/scratch files.
+.git
+.env
+*.md
+deploy/
+scripts/
+apps/web/node_modules
+apps/web/dist
+apps/api/internal/httpapi/web/README.md
