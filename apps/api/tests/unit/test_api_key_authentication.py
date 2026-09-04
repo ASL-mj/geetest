@@ -9,7 +9,7 @@ from app.domain.models import ApiKey, Cdk, User
 
 
 def active_entities() -> tuple[ApiKey, User, Cdk]:
-    user = User(id=uuid4(), username="alice", password_hash="hash", status="ACTIVE")
+    user = User(id=uuid4(), status="ACTIVE")
     cdk = Cdk(
         id=uuid4(),
         batch_id=uuid4(),

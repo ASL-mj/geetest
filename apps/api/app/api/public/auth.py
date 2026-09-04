@@ -13,30 +13,17 @@ from app.api.dependencies.session import (
     require_user_session,
 )
 from app.application.auth.activate import activate_cdk
-from app.application.auth.login import login_user
 from app.application.errors import ApplicationError
 from app.core.ids import new_request_id
 from app.core.settings import Settings
 
 router = APIRouter(prefix="/v1/auth", tags=["authentication"])
 
-Username = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=3,
-        max_length=64,
-        pattern=r"^[A-Za-z0-9_.-]+$",
-    ),
-]
-Password = Annotated[str, StringConstraints(min_length=12, max_length=256)]
 CdkCode = Annotated[str, StringConstraints(strip_whitespace=True, min_length=4, max_length=128)]
 
 
 class ActivationRequest(BaseModel):
     cdk: CdkCode
-    username: Username
-    password: Password
 
     @field_validator("cdk")
     @classmethod
@@ -44,11 +31,6 @@ class ActivationRequest(BaseModel):
         if not any(character.isalnum() for character in value):
             raise ValueError("CDK must include at least one letter or digit")
         return value
-
-
-class LoginRequest(BaseModel):
-    username: Username
-    password: Password
 
 
 def error_response(error: ApplicationError, correlation_id: str) -> JSONResponse:
@@ -62,8 +44,8 @@ def error_response(error: ApplicationError, correlation_id: str) -> JSONResponse
     )
 
 
-def user_data(user_id: object, username: str) -> dict[str, str]:
-    return {"id": str(user_id), "username": username}
+def user_data(user_id: object, cdk_prefix: str) -> dict[str, str]:
+    return {"id": str(user_id), "cdk_prefix": cdk_prefix}
 
 
 def set_session_cookie(response: Response, token: str, settings: Settings) -> None:
@@ -78,7 +60,7 @@ def set_session_cookie(response: Response, token: str, settings: Settings) -> No
     )
 
 
-@router.post("/activate", status_code=status.HTTP_201_CREATED, response_model=None)
+@router.post("/activate", status_code=status.HTTP_200_OK, response_model=None)
 def activate(
     payload: ActivationRequest,
     response: Response,
@@ -91,48 +73,20 @@ def activate(
             database_session,
             settings,
             cdk_code=payload.cdk,
-            username=payload.username,
-            password=payload.password,
         )
     except ApplicationError as error:
         database_session.rollback()
         return error_response(error, correlation_id)
 
+    response.status_code = status.HTTP_201_CREATED if result.newly_activated else status.HTTP_200_OK
     set_session_cookie(response, result.session.token, settings)
     return {
         "success": True,
         "request_id": correlation_id,
         "data": {
-            "user": user_data(result.user.id, result.user.username),
-            "default_api_key": result.default_api_key,
+            "user": user_data(result.user.id, result.cdk_prefix),
+            **({"default_api_key": result.default_api_key} if result.default_api_key else {}),
         },
-    }
-
-
-@router.post("/login", response_model=None)
-def login(
-    payload: LoginRequest,
-    response: Response,
-    database_session: Session = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, object] | JSONResponse:
-    correlation_id = new_request_id()
-    try:
-        result = login_user(
-            database_session,
-            settings,
-            username=payload.username,
-            password=payload.password,
-        )
-    except ApplicationError as error:
-        database_session.rollback()
-        return error_response(error, correlation_id)
-
-    set_session_cookie(response, result.session.token, settings)
-    return {
-        "success": True,
-        "request_id": correlation_id,
-        "data": {"user": user_data(result.user.id, result.user.username)},
     }
 
 

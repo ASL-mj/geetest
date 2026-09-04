@@ -84,8 +84,8 @@ def seed_cdk(
         return cdk
 
 
-def activation_payload(cdk: str, username: str = "alice") -> dict[str, str]:
-    return {"cdk": cdk, "username": username, "password": "A-long-password-123"}
+def activation_payload(cdk: str) -> dict[str, str]:
+    return {"cdk": cdk}
 
 
 def test_activate_binds_cdk_creates_user_session_and_default_key(
@@ -113,7 +113,7 @@ def test_activate_binds_cdk_creates_user_session_and_default_key(
         assert persisted_cdk.activated_at is not None
         assert persisted_cdk.expires_at is not None
         assert persisted_cdk.expires_at > datetime.now(UTC) + timedelta(days=29)
-        user = session.scalar(select(User).where(User.username == "alice"))
+        user = session.get(User, UUID(body["data"]["user"]["id"]))
         assert user is not None
         api_key = session.scalar(select(ApiKey).where(ApiKey.user_id == user.id))
         assert api_key is not None
@@ -157,20 +157,20 @@ def test_invalid_cdk_state_does_not_create_user_or_key(
     )
 
     response = client.post(
-        "/v1/auth/activate", json=activation_payload(f"CDK-{expected_code}", expected_code.lower())
+        "/v1/auth/activate", json=activation_payload(f"CDK-{expected_code}")
     )
 
     assert response.status_code == expected_status
     assert response.json()["error"]["code"] == expected_code
     with Session(migrated_engine) as session:
-        assert session.scalar(select(User).where(User.username == expected_code.lower())) is None
+        assert session.scalar(select(User)) is None
         assert session.scalar(select(ApiKey)) is None
 
 
 def test_invalid_activation_payload_uses_standard_error_response(client: TestClient) -> None:
     response = client.post(
         "/v1/auth/activate",
-        json={"cdk": "CDK-ACTIVATION-1234", "username": "alice", "password": "short"},
+        json={},
     )
 
     assert response.status_code == 422
@@ -183,24 +183,24 @@ def test_already_bound_cdk_does_not_create_a_second_user_or_key(
     client: TestClient, migrated_engine: Engine, settings: Settings
 ) -> None:
     with Session(migrated_engine) as session:
-        user = User(username="existing", password_hash="not-used", status="ACTIVE")
+        user = User(status="ACTIVE")
         session.add(user)
         session.commit()
         session.refresh(user)
     seed_cdk(migrated_engine, settings, status="ACTIVE", bound_user_id=user.id)
 
     response = client.post(
-        "/v1/auth/activate", json=activation_payload("CDK-ACTIVATION-1234", "second")
+        "/v1/auth/activate", json=activation_payload("CDK-ACTIVATION-1234")
     )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "CDK_ALREADY_BOUND"
+    assert response.status_code == 200
+    assert response.json()["success"] is True
     with Session(migrated_engine) as session:
-        assert session.scalar(select(User).where(User.username == "second")) is None
+        assert session.scalar(select(User)).id == user.id
         assert session.scalar(select(ApiKey).where(ApiKey.user_id == user.id)) is None
 
 
-def test_login_and_logout_revoke_only_the_current_session(
+def test_cdk_reentry_and_logout_revoke_only_the_current_session(
     client: TestClient, migrated_engine: Engine, settings: Settings
 ) -> None:
     seed_cdk(migrated_engine, settings)
@@ -209,9 +209,7 @@ def test_login_and_logout_revoke_only_the_current_session(
     first_session = client.cookies.get("session")
     assert first_session is not None
 
-    login = client.post(
-        "/v1/auth/login", json={"username": "alice", "password": "A-long-password-123"}
-    )
+    login = client.post("/v1/auth/activate", json=activation_payload("CDK-ACTIVATION-1234"))
 
     assert login.status_code == 200
     second_session = client.cookies.get("session")
@@ -245,7 +243,7 @@ def test_logout_rejects_a_disabled_user(
     assert activation.status_code == 201
 
     with Session(migrated_engine) as session:
-        user = session.scalar(select(User).where(User.username == "alice"))
+        user = session.scalar(select(User))
         assert user is not None
         user.status = "DISABLED"
         session.commit()
@@ -263,17 +261,17 @@ def test_concurrent_activation_binds_a_cdk_once(
     factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
     app = create_app(settings=settings, session_factory=factory)
 
-    def activate(username: str) -> int:
+    def activate(_: int) -> int:
         with TestClient(app, base_url="https://testserver") as local_client:
             response = local_client.post(
-                "/v1/auth/activate", json=activation_payload("CDK-ACTIVATION-1234", username)
+                "/v1/auth/activate", json=activation_payload("CDK-ACTIVATION-1234")
             )
             return response.status_code
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(activate, ["alice", "bob"]))
+        statuses = list(executor.map(activate, [1, 2]))
 
-    assert sorted(statuses) == [201, 409]
+    assert sorted(statuses) == [200, 201]
     with Session(migrated_engine) as session:
-        assert session.scalar(select(User).where(User.username.in_(["alice", "bob"]))) is not None
+        assert session.query(User).count() == 1
         assert session.scalar(select(ApiKey)) is not None

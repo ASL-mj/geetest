@@ -25,7 +25,7 @@ def session(migrated_engine: Engine) -> Iterator[Session]:
 
 
 def create_user(session: Session) -> User:
-    user = User(username=f"user_{uuid4().hex}", password_hash="argon2id$test")
+    user = User(status="ACTIVE")
     session.add(user)
     session.flush()
     return user

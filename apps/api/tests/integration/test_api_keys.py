@@ -45,11 +45,11 @@ def clear_platform_data(migrated_engine: Engine) -> None:
 
 
 def activate_user(
-    client: TestClient, engine: Engine, settings: Settings, username: str = "alice"
+    client: TestClient, engine: Engine, settings: Settings, identity: str = "alice"
 ) -> str:
-    code = f"CDK-{username}-1234"
+    code = f"CDK-{identity}-1234"
     with Session(engine) as session:
-        batch = CdkBatch(name=f"batch-{username}", default_quota=10, service_duration_days=30)
+        batch = CdkBatch(name=f"batch-{identity}", default_quota=10, service_duration_days=30)
         session.add(batch)
         session.flush()
         session.add(
@@ -69,7 +69,7 @@ def activate_user(
 
     response = client.post(
         "/v1/auth/activate",
-        json={"cdk": code, "username": username, "password": "A-long-password-123"},
+        json={"cdk": code},
     )
     assert response.status_code == 201
     default_api_key = response.json()["data"]["default_api_key"]

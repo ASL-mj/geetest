@@ -6,11 +6,11 @@
 
 ## 1. 目标与范围
 
-将现有无状态 GeeTest 解析服务封装为一个多用户开发者平台。平台对外提供用户 API Key 和统一的解析接口，并负责 CDK 激活、用户登录、配额、限流、幂等、调用审计和管理员运营。
+将现有无状态 GeeTest 解析服务封装为一个多用户开发者平台。平台对外提供用户 API Key 和统一的解析接口，并负责 CDK 激活/再次进入、配额、限流、幂等、调用审计和管理员运营。
 
 V1 交付以下能力：
 
-- CDK 激活创建账号、用户登录、退出与改密；
+- CDK 激活、CDK 再次进入、退出会话；不设置用户密码；
 - 用户 API Key 的创建、重命名、启用、禁用和删除；
 - 单一 `slide` 类型的 GeeTest 解析接口；
 - 用户/CDK 维度共享的调用额度、每分钟速率和并发限制；
@@ -57,8 +57,8 @@ V1 不包含在线支付、自动续费、多验证码类型、团队与子账�
 
 | 角色 | 权限 |
 |---|---|
-| 访客 | 激活 CDK、登录。 |
-| 普通用户 | 查看自己的账号、CDK、Key、用量、日志和文档；调用平台解析接口。 |
+| 访客 | 输入 CDK 激活或再次进入。 |
+| 普通用户 | 查看自己的 CDK 身份、Key、用量、日志和文档；调用平台解析接口。 |
 | 管理员 | 管理 CDK 批次、CDK、用户、Key、额度、日志、系统设置和服务健康状态。 |
 | 管理员只读角色 | 查看仪表盘、日志、账本和健康状态；没有任何写权限。 |
 
@@ -81,14 +81,14 @@ V1 不包含在线支付、自动续费、多验证码类型、团队与子账�
 
 | 页面 | 展示字段 | 操作 |
 |---|---|---|
-| 激活 / 登录 | CDK、用户名、密码、错误提示 | 激活、登录。 |
+| CDK 激活 / 进入 | CDK、服务状态、错误提示 | 激活、再次进入、退出。 |
 | 控制台首页 | 服务状态、CDK 状态、到期时间、总/已用/剩余额度、今日调用、成功率、最近调用、API 地址 | 复制地址和示例、进入 Key 管理。 |
 | API Key 管理 | 名称、前缀、末尾四位、状态、创建时间、最后调用、调用次数 | 创建、重命名、启用、禁用、删除。 |
 | 在线接口调试 | 已选 Key、`captcha_id`、`risk_type`、脱敏响应、请求 ID、耗时、配额变化 | 发起调试、复制请求 ID。 |
 | 用量统计 | 时间范围、调用趋势、成功率、按 Key 聚合、额度流水摘要 | 筛选时间和 Key。 |
 | 调用日志 | 请求 ID、Key、Captcha ID、状态、耗时、错误码、扣费状态、时间 | 筛选、分页、复制、查看详情。 |
 | 接口文档 | 平台地址、认证、请求/响应示例、错误码 | 复制 curl、Python、JavaScript 示例。 |
-| 账号与服务信息 | 用户名、CDK 批次、服务状态、到期时间、会话状态 | 修改密码、退出全部会话。 |
+| 账号与服务信息 | CDK 身份、CDK 批次、服务状态、到期时间、会话状态 | 重新输入 CDK、退出会话。 |
 
 在线调试通过受控的平台接口执行，与公开解析接口共用认证后的 Key、限流、并发、额度与审计链路。浏览器不显示底层服务密钥。
 
@@ -114,18 +114,18 @@ V1 不包含在线支付、自动续费、多验证码类型、团队与子账�
 ### 7.1 CDK 激活
 
 ```text
-访客提交 CDK、用户名、密码
+访客提交 CDK
   -> 校验 CDK 格式、状态、激活截止时间、额度和绑定状态
   -> 事务锁定 CDK
-  -> 创建用户并写入 Argon2id 密码哈希
+  -> 首次使用时创建内部用户
   -> 绑定 CDK，设置 activated_at 与 expires_at
   -> 创建默认 API Key
-  -> 写入激活审计记录
-  -> 创建用户登录会话
+  -> 写入激活/进入审计记录
+  -> 创建用户浏览器会话
   -> 仅本次响应返回默认 API Key 明文
 ```
 
-同一 CDK 的并发激活依赖数据库行锁和 `bound_user_id` 唯一约束；第二个请求返回 `CDK_ALREADY_BOUND`。
+同一 CDK 的并发首次激活依赖数据库行锁和 `bound_user_id` 唯一约束；已绑定的 CDK 再次提交时只签发新的浏览器会话，不创建第二个用户或 Key。
 
 ### 7.2 公开解析调用
 
@@ -197,7 +197,6 @@ RECEIVED -> RESERVED -> DISPATCHED -> SUCCEEDED
 | 方法 | 路径 | 认证 |
 |---|---|---|
 | POST | `/v1/auth/activate` | 无。 |
-| POST | `/v1/auth/login` | 无。 |
 | POST | `/v1/auth/logout` | 用户会话。 |
 | GET | `/v1/account` | 用户会话。 |
 | GET | `/v1/usage` | 用户会话。 |
@@ -276,7 +275,7 @@ Idempotency-Key: UNIQUE_REQUEST_ID
 
 ### 10.1 `users`
 
-`id uuid PK`、`username citext UNIQUE`、`password_hash text`、`status varchar`、`last_login_at timestamptz`、`created_at timestamptz`、`updated_at timestamptz`。
+`id uuid PK`、`status varchar`、`last_login_at timestamptz`、`created_at timestamptz`、`updated_at timestamptz`。用户身份由 `cdks.bound_user_id` 反查，不保存用户名或密码。
 
 ### 10.2 `cdk_batches`
 
@@ -330,7 +329,7 @@ Idempotency-Key: UNIQUE_REQUEST_ID
 
 ## 12. 安全、隐私与可观测性
 
-- 用户和管理员密码使用 Argon2id；会话 Cookie 使用 `HttpOnly`、`Secure`、`SameSite`。
+- 管理员密码使用 Argon2id；用户仅使用 CDK 凭证换取短期会话 Cookie，Cookie 使用 `HttpOnly`、`Secure`、`SameSite`。
 - API Key 与 CDK 通过服务端 pepper 计算 HMAC 哈希；原始值不写数据库、日志、审计或异常栈。
 - 调用日志不保存 `X-Service-Key`、完整平台 API Key、底层上游 Token 或完整敏感解析结果。
 - 客户端 IP 存储脱敏网段与不可逆关联哈希；User-Agent 限长。

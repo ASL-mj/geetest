@@ -179,14 +179,13 @@ git add apps/api/app/db apps/api/app/domain apps/api/alembic apps/api/tests/inte
 git commit -m "feat: add platform domain schema"
 ```
 
-## Task 3: Implement User Sessions and CDK Activation
+## Task 3: Implement CDK Identity Sessions and Activation
 
 **Files:**
-- Create: `apps/api/app/application/auth/{passwords,sessions,activate,login}.py`
+- Create: `apps/api/app/application/auth/{sessions,activate}.py`
 - Create: `apps/api/app/api/public/auth.py`
 - Create: `apps/api/app/infrastructure/repositories/{users,cdks,sessions}.py`
 - Create: `apps/api/tests/integration/test_cdk_activation.py`
-- Create: `apps/api/tests/unit/test_passwords.py`
 
 - [ ] **Step 1: Write activation tests.**
 
@@ -194,28 +193,26 @@ git commit -m "feat: add platform domain schema"
 async def test_activate_binds_cdk_creates_user_session_and_default_key(client, seeded_cdk):
     response = await client.post("/v1/auth/activate", json={
         "cdk": seeded_cdk.plaintext,
-        "username": "alice",
-        "password": "A-long-password-123",
     })
     assert response.status_code == 201
     assert response.json()["data"]["default_api_key"].startswith("gtsk_live_")
     assert "session" in response.cookies
 ```
 
-Add separate cases for expired, disabled, exhausted and already-bound CDKs. Assert that failed activation never creates a user or Key.
+Add separate cases for expired, disabled, exhausted and already-bound CDKs. A repeated valid CDK must issue a new browser session without creating another user or Key. Assert that failed activation never creates a user or Key.
 
 - [ ] **Step 2: Run the activation tests before implementation.**
 
-Run: `cd apps/api && uv run pytest tests/integration/test_cdk_activation.py tests/unit/test_passwords.py -q`  
+Run: `cd apps/api && uv run pytest tests/integration/test_cdk_activation.py -q`
 Expected: route-not-found failure.
 
-- [ ] **Step 3: Implement password, CDK and session services.**
+- [ ] **Step 3: Implement CDK identity, activation and session services.**
 
-Use Argon2id for passwords. Normalize CDKs, look them up by `HMAC-SHA-256(cdk, CDK_PEPPER)`, and lock the CDK row with `SELECT ... FOR UPDATE` within one transaction. Set `expires_at` from the batch service duration, bind the user, create the default Key, create a revocable session record, and issue an HttpOnly, Secure, SameSite session cookie.
+Normalize CDKs, look them up by `HMAC-SHA-256(cdk, CDK_PEPPER)`, and lock the CDK row with `SELECT ... FOR UPDATE` within one transaction. On first use, set `expires_at` from the batch service duration, bind an internal user, create the default Key, create a revocable session record, and issue an HttpOnly, Secure, SameSite session cookie. On later use, validate the bound CDK and issue a new session without creating another user or Key.
 
-- [ ] **Step 4: Add login, logout and session dependency.**
+- [ ] **Step 4: Add logout and session dependency.**
 
-`POST /v1/auth/login` verifies the password and creates a new session. `POST /v1/auth/logout` revokes only the current session. The `require_user_session` dependency loads an active user and rejects disabled accounts.
+`POST /v1/auth/logout` revokes only the current session. The `require_user_session` dependency loads an active user and rejects disabled accounts. There is no end-user password login endpoint; CDK re-entry uses `POST /v1/auth/activate`.
 
 - [ ] **Step 5: Verify race safety.**
 
@@ -519,7 +516,7 @@ Use a dense desktop sidebar that collapses into a mobile drawer. Use Lucide butt
 
 - [ ] **Step 4: Implement user routes and query state.**
 
-Implement `/activate`, `/login`, `/dashboard`, `/keys`, `/playground`, `/usage`, `/calls`, `/docs`, and `/account`. Use HTTP-only session cookies with `credentials: "include"`; never store user sessions or API Keys in localStorage. The playground sends a selected Key ID, not a secret.
+Implement `/activate`, `/dashboard`, `/keys`, `/playground`, `/usage`, `/calls`, `/docs`, and `/account`. Use HTTP-only session cookies with `credentials: "include"`; never store CDKs, user sessions or API Keys in localStorage. The playground sends a selected Key ID, not a secret.
 
 - [ ] **Step 5: Verify desktop and narrow layouts.**
 
