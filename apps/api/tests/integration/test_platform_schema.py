@@ -50,6 +50,7 @@ def migrated_engine() -> Iterator[Engine]:
                 "REVOKE UPDATE, DELETE ON TABLES FROM geetest_platform_app"
             )
         )
+        connection.execute(text("DROP OWNED BY geetest_platform_app"))
         connection.execute(text("DROP ROLE geetest_platform_app"))
     control_engine.dispose()
 
