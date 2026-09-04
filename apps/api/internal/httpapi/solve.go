@@ -115,6 +115,66 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleConsoleSolve is the session-authenticated debug endpoint. It reuses
+// the same admission chain with a server-generated idempotency key derived
+// from the request id, so console tests never bypass quota or audit.
+func (s *Server) handleConsoleSolve(w http.ResponseWriter, r *http.Request) {
+	if s.solve == nil {
+		writeApplicationError(w, service.NewError(503, "SOLVE_UNAVAILABLE", "Solve service is not configured."))
+		return
+	}
+	user := userFromContext(r)
+
+	var payload struct {
+		KeyID     string `json:"key_id"`
+		CaptchaID string `json:"captcha_id"`
+	}
+	if !decodeJSON(w, r, &payload) {
+		return
+	}
+	captchaID := strings.TrimSpace(payload.CaptchaID)
+	keyID := parseUUID(payload.KeyID)
+	if captchaID == "" || len(captchaID) > 256 || keyID == nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return
+	}
+
+	caller, appErr := s.services.AuthenticateAPIKeyForUser(r.Context(), *parseUUID(user.UserID), *keyID)
+	if appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+
+	clientIP, clientIPHash := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	outcome := s.solve.Solve(r.Context(), service.SolveInput{
+		Caller:         caller,
+		CaptchaID:      captchaID,
+		IdempotencyKey: "console:" + newRequestID(),
+		ClientIPMasked: clientIP,
+		ClientIPHash:   clientIPHash,
+		UserAgent:      truncateUserAgent(r.Header.Get("User-Agent")),
+	})
+
+	if outcome.SolveError != nil {
+		writeJSON(w, outcome.SolveError.HTTPStatus, errorEnvelope{
+			Success:   false,
+			RequestID: firstNonEmpty(outcome.RequestID, newRequestID()),
+			Error: errorBody{
+				Code:    outcome.SolveError.Code,
+				Message: outcome.SolveError.Message,
+			},
+		})
+		return
+	}
+	writeSuccess(w, outcome.RequestID, http.StatusOK, map[string]any{
+		"captcha_id":     outcome.Result.CaptchaID,
+		"lot_number":     outcome.Result.LotNumber,
+		"captcha_output": outcome.Result.CaptchaOutput,
+		"pass_token":     outcome.Result.PassToken,
+		"gen_time":       outcome.Result.GenTime,
+	})
+}
+
 func truncateUserAgent(agent string) string {
 	agent = strings.TrimSpace(agent)
 	if len(agent) > 512 {

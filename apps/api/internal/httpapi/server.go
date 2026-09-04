@@ -36,6 +36,7 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("GET /v1/usage", server.requireUserSession(server.handleGetUsage))
 	mux.HandleFunc("GET /v1/calls", server.requireUserSession(server.handleListCalls))
 	mux.HandleFunc("GET /v1/calls/{request_id}", server.requireUserSession(server.handleGetCall))
+	mux.HandleFunc("POST /v1/tools/captcha/solve", server.requireUserSession(server.handleConsoleSolve))
 	if solve != nil {
 		mux.HandleFunc("POST /v1/captcha/solve", server.handleSolve)
 	}

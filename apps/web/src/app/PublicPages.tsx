@@ -1,6 +1,8 @@
 import { ArrowRight, BookOpen, Check, CircleCheck, Code2, Copy, FileCode2, KeyRound, LockKeyhole, ShieldCheck, Terminal, Zap } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 
+import { ApiError, api } from '../lib/api';
+
 type PublicHeaderProps = { onBack?: () => void; onDocs: () => void; onStart: () => void; docsActive?: boolean };
 type PublicHomeProps = { onStart: () => void; onDocs: () => void; onAdmin: () => void };
 type AuthPageProps = { onBack: () => void; onDocs: () => void; onSuccess: () => void };
@@ -15,9 +17,34 @@ export function PublicHome({ onStart, onDocs, onAdmin }: PublicHomeProps) {
 }
 
 export function AuthPage({ onBack, onDocs, onSuccess }: AuthPageProps) {
-  const [submitted, setSubmitted] = useState(false);
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSubmitted(true); window.setTimeout(onSuccess, 650); };
-  return <div className="auth-shell"><PublicHeader onBack={onBack} onDocs={onDocs} onStart={onBack} /><main className="auth-main"><section className="auth-aside"><div className="public-kicker"><span className="live-dot" />V1 平台入口</div><h1>一枚 CDK<br /><em>就是你的身份</em></h1><p>输入管理员发放的 CDK 即可进入控制台。平台会自动绑定服务，并在首次使用时生成默认 API Key。</p><div className="auth-aside__list"><div><Check aria-hidden="true" size={15} /><span>无需账号密码</span></div><div><Check aria-hidden="true" size={15} /><span>CDK 绑定服务额度</span></div><div><Check aria-hidden="true" size={15} /><span>同一枚 CDK 可再次进入控制台</span></div></div></section><section className="auth-card"><div className="auth-card__heading"><h2>使用 CDK 进入平台</h2><p>首次使用会创建平台身份；再次输入同一 CDK 可恢复会话。</p></div><form onSubmit={submit}><label htmlFor="auth-cdk">CDK 编码</label><input id="auth-cdk" minLength={4} placeholder="例如：CDK-XXXX-XXXX" required /><p className="auth-hint">CDK 是唯一的平台身份凭证，请妥善保管。</p><button className="public-primary public-primary--full" disabled={submitted} type="submit">{submitted ? '正在进入控制台…' : '激活 / 登录'} <ArrowRight aria-hidden="true" size={17} /></button></form><div className="auth-card__footer"><ShieldCheck aria-hidden="true" size={15} /><span>演示界面：提交后进入控制台预览，不会发送表单数据。</span></div></section></main></div>;
+  const [cdk, setCdk] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await api.activate(cdk.trim());
+      // First activation surfaces the default API key exactly once; the user
+      // must copy it before entering the console.
+      if (result.data?.default_api_key) {
+        setNewKey(result.data.default_api_key);
+        setSubmitting(false);
+        return;
+      }
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '网络错误，请稍后重试。');
+      setSubmitting(false);
+    }
+  };
+  if (newKey) {
+    return <div className="auth-shell"><PublicHeader onBack={onBack} onDocs={onDocs} onStart={onBack} /><main className="auth-main"><section className="auth-card auth-card--wide"><div className="auth-card__heading"><h2>API Key 已创建</h2><p>默认 Key 的完整明文只显示这一次。复制并保存到服务端环境变量后再进入控制台。</p></div><div className="secret-field"><code>{newKey}</code><button className="quiet-button" onClick={() => void navigator.clipboard?.writeText(newKey)} type="button">复制完整 Key</button></div><button className="public-primary public-primary--full" onClick={onSuccess} type="button">我已安全保存，进入控制台 <ArrowRight aria-hidden="true" size={17} /></button></section></main></div>;
+  }
+  return <div className="auth-shell"><PublicHeader onBack={onBack} onDocs={onDocs} onStart={onBack} /><main className="auth-main"><section className="auth-aside"><div className="public-kicker"><span className="live-dot" />V1 平台入口</div><h1>一枚 CDK<br /><em>就是你的身份</em></h1><p>输入管理员发放的 CDK 即可进入控制台。平台会自动绑定服务，并在首次使用时生成默认 API Key。</p><div className="auth-aside__list"><div><Check aria-hidden="true" size={15} /><span>无需账号密码</span></div><div><Check aria-hidden="true" size={15} /><span>CDK 绑定服务额度</span></div><div><Check aria-hidden="true" size={15} /><span>同一枚 CDK 可再次进入控制台</span></div></div></section><section className="auth-card"><div className="auth-card__heading"><h2>使用 CDK 进入平台</h2><p>首次使用会创建平台身份；再次输入同一 CDK 可恢复会话。</p></div><form onSubmit={submit}><label htmlFor="auth-cdk">CDK 编码</label><input id="auth-cdk" minLength={4} onChange={(event) => setCdk(event.target.value)} placeholder="例如：CDK-XXXX-XXXX" required value={cdk} /><p className="auth-hint">CDK 是唯一的平台身份凭证，请妥善保管。</p>{error && <p className="auth-error" role="alert">{error}</p>}<button className="public-primary public-primary--full" disabled={submitting || cdk.trim().length < 4} type="submit">{submitting ? '正在进入控制台…' : '激活 / 登录'} <ArrowRight aria-hidden="true" size={17} /></button></form><div className="auth-card__footer"><ShieldCheck aria-hidden="true" size={15} /><span>平台使用短期会话 Cookie；CDK 与 API Key 不会保存在浏览器。</span></div></section></main></div>;
 }
 
 export function PublicDocs({ onBack, onStart }: PublicDocsProps) {

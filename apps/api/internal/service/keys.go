@@ -185,6 +185,27 @@ func (s *Services) AuthenticateAPIKey(ctx context.Context, secret string) (Authe
 	return AuthenticatedCaller{UserID: user.ID, CDKID: cdk.ID, APIKeyID: key.ID, APIKey: key, User: user, CDK: cdk}, nil
 }
 
+// AuthenticateAPIKeyForUser validates a console debug invocation: the key
+// must belong to the session user and pass the same effective status chain.
+func (s *Services) AuthenticateAPIKeyForUser(ctx context.Context, userID, keyID uuid.UUID) (AuthenticatedCaller, *ApplicationError) {
+	key, err := store.GetAPIKeyForUser(ctx, s.Pool, userID, keyID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return AuthenticatedCaller{}, ErrAPIKeyNotFound()
+		}
+		slog.Error("authenticate owned key failed", "error", err)
+		return AuthenticatedCaller{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	user, cdk, appErr := s.loadCallerState(ctx, key.UserID)
+	if appErr != nil {
+		return AuthenticatedCaller{}, appErr
+	}
+	if appErr := validateEffectiveCaller(key, user, cdk); appErr != nil {
+		return AuthenticatedCaller{}, appErr
+	}
+	return AuthenticatedCaller{UserID: user.ID, CDKID: cdk.ID, APIKeyID: key.ID, APIKey: key, User: user, CDK: cdk}, nil
+}
+
 // loadCallerState fetches the user and the single bound CDK.
 func (s *Services) loadCallerState(ctx context.Context, userID uuid.UUID) (domain.User, domain.Cdk, *ApplicationError) {
 	user, err := store.GetUser(ctx, s.Pool, userID)
