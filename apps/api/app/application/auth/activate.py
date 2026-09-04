@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 from app.application.auth.passwords import hash_password
 from app.application.auth.sessions import IssuedUserSession, issue_user_session
 from app.application.errors import ApplicationError
-from app.core.crypto import generate_opaque_token, hmac_sha256, normalize_cdk
+from app.application.keys.create import create_api_key
+from app.core.crypto import hmac_sha256, normalize_cdk
 from app.core.settings import Settings
-from app.domain.models import ApiKey, User
+from app.domain.models import User
 from app.infrastructure.repositories.cdks import CdkRepository
 from app.infrastructure.repositories.users import UserRepository
 
@@ -72,18 +73,9 @@ def activate_cdk(
             )
             user.last_login_at = now
 
-            default_api_key = f"gtsk_live_{generate_opaque_token()}"
-            session.add(
-                ApiKey(
-                    user_id=user.id,
-                    name="default",
-                    key_prefix=default_api_key[:16],
-                    key_last4=default_api_key[-4:],
-                    key_hash=hmac_sha256(default_api_key, settings.api_key_pepper),
-                    status="ACTIVE",
-                    total_calls=0,
-                )
-            )
+            default_api_key = create_api_key(
+                session, settings, user_id=user.id, name="default"
+            ).secret
             issued_session = issue_user_session(session, user.id, settings)
     except IntegrityError as error:
         raise ApplicationError(409, "USERNAME_TAKEN", "Username is already in use.") from error

@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import JSONResponse
@@ -16,6 +15,7 @@ from app.api.dependencies.session import (
 from app.application.auth.activate import activate_cdk
 from app.application.auth.login import login_user
 from app.application.errors import ApplicationError
+from app.core.ids import new_request_id
 from app.core.settings import Settings
 
 router = APIRouter(prefix="/v1/auth", tags=["authentication"])
@@ -49,10 +49,6 @@ class ActivationRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: Username
     password: Password
-
-
-def request_id() -> str:
-    return f"req_{uuid4().hex}"
 
 
 def error_response(error: ApplicationError, correlation_id: str) -> JSONResponse:
@@ -89,7 +85,7 @@ def activate(
     database_session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object] | JSONResponse:
-    correlation_id = request_id()
+    correlation_id = new_request_id()
     try:
         result = activate_cdk(
             database_session,
@@ -120,7 +116,7 @@ def login(
     database_session: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object] | JSONResponse:
-    correlation_id = request_id()
+    correlation_id = new_request_id()
     try:
         result = login_user(
             database_session,
@@ -149,4 +145,4 @@ def logout(
     current.session.revoked_at = datetime.now(UTC)
     database_session.commit()
     response.delete_cookie("session", path="/")
-    return {"success": True, "request_id": request_id(), "data": {}}
+    return {"success": True, "request_id": new_request_id(), "data": {}}

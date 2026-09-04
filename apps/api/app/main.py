@@ -1,11 +1,11 @@
-from uuid import uuid4
-
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.public.auth import router as auth_router
+from app.api.public.keys import router as keys_router
 from app.application.errors import ApplicationError
+from app.core.ids import new_request_id
 from app.core.settings import Settings
 from app.db.session import SessionFactory, create_session_factory
 
@@ -32,7 +32,7 @@ def create_app(
             status_code=error.status_code,
             content={
                 "success": False,
-                "request_id": f"req_{uuid4().hex}",
+                "request_id": new_request_id(),
                 "error": {
                     "code": error.code,
                     "message": error.message,
@@ -49,7 +49,7 @@ def create_app(
             status_code=422,
             content={
                 "success": False,
-                "request_id": f"req_{uuid4().hex}",
+                "request_id": new_request_id(),
                 "error": {
                     "code": "INVALID_REQUEST",
                     "message": "Request validation failed.",
@@ -63,6 +63,7 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(auth_router)
+    app.include_router(keys_router)
     return app
 
 
