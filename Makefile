@@ -1,7 +1,7 @@
 COMPOSE_FILE := deploy/compose.yml
 TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/geetest_platform_test?sslmode=disable
 
-.PHONY: api-run api-migrate api-seed api-test api-integration-test api-lint web-test web-lint web-typecheck lint typecheck test up down
+.PHONY: api-run api-migrate api-seed api-test api-integration-test api-lint admin-bootstrap mock-solver web-test web-lint web-typecheck lint typecheck test up down
 
 api-run:
 	cd apps/api && go run ./cmd/api
@@ -11,6 +11,12 @@ api-migrate:
 
 api-seed:
 	cd apps/api && go run ./cmd/seed -code CAPTCHA-DEMO-2026 -quota 100
+
+admin-bootstrap:
+	cd apps/api && go run ./cmd/admin-bootstrap
+
+mock-solver:
+	python3 scripts/mock_solver.py
 
 api-test:
 	cd apps/api && go test ./...

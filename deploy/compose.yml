@@ -27,6 +27,19 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: ../apps/api
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

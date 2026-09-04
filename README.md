@@ -9,11 +9,21 @@ The underlying solver is an internal dependency. This repository must not modify
 - [V1 product and architecture specification](docs/specs/2026-09-04-geetest-service-platform-v1-design.md)
 - [V1 implementation plan](docs/plans/2026-09-04-geetest-service-platform-v1-implementation.md)
 
-## Chosen Delivery Baseline
+## Delivery Baseline
 
-- Backend: Go 1.25, chi-free stdlib `net/http` router (Go 1.22+ patterns), pgx v5, PostgreSQL 16, Redis 7.
-- Frontend: React 19, TypeScript, Vite, TanStack Router and Query, React Hook Form, Zod, TanStack Table, Lucide React.
+- Backend: Go 1.25, stdlib `net/http` router (Go 1.22+ patterns), pgx v5, PostgreSQL 16, Redis 7.
+- Frontend: React 19, TypeScript, Vite, Lucide React icons.
 - Deployment: one backend service, one web build, PostgreSQL, Redis, reverse proxy with TLS.
+
+## Implemented V1 Features
+
+- CDK activation / re-entry sessions (HttpOnly cookie, no passwords), one-time default API key.
+- API Key lifecycle: create (secret shown once), rename, enable/disable, soft delete.
+- `POST /v1/captcha/solve`: Bearer auth, Idempotency-Key replay, Redis token-bucket rate limit, concurrency leases, atomic quota RESERVE/CONFIRM/REFUND ledger, typed solver errors with automatic refunds.
+- User queries: `GET /v1/account`, `GET /v1/usage`, `GET /v1/calls` (cursor pagination), `GET /v1/calls/{request_id}` (ownership enforced).
+- Console debug: `POST /v1/tools/captcha/solve` (session + owned key; no plaintext key handling in the browser).
+- Admin surface `/admin/v1`: Argon2id login, dashboard, CDK batch generation (plaintext codes returned once), ledger-based quota adjustments, user suspension with immediate session revocation, immutable audit logs, sanitized solver health probe.
+- Call logs are redacted: no solver tokens, key plaintext, or full response bodies (replay payloads live in a dedicated `idempotency_responses` table).
 
 ## Backend Quick Start
 
@@ -24,6 +34,20 @@ make api-seed      # insert a local demo CDK (CAPTCHA-DEMO-2026)
 make api-run       # serve the API on http://localhost:8000
 ```
 
+Provision an operator account (password comes from the environment):
+
+```bash
+ADMIN_BOOTSTRAP_USERNAME=admin ADMIN_BOOTSTRAP_PASSWORD=<secret> make admin-bootstrap
+```
+
+Local end-to-end testing with a fake solver:
+
+```bash
+make mock-solver   # listens on 127.0.0.1:18081
+# point GEETEST_SOLVER_URL=http://127.0.0.1:18081 and
+# GEETEST_SERVICE_API_KEY=demo-service-key in .env, then restart the API
+```
+
 Useful checks:
 
 ```bash
@@ -32,6 +56,20 @@ make api-integration-test      # full HTTP suite against an empty test database
 make lint                      # go vet + gofmt, eslint
 ```
 
-Backend layout (`apps/api`): `cmd/{api,migrate,seed}`, `internal/{config,crypto,domain,store,service,httpapi}`. Migrations are embedded SQL under `internal/store/migrations` and applied exactly once by `cmd/migrate`.
+Backend layout (`apps/api`): `cmd/{api,migrate,seed,admin-bootstrap}`, `internal/{config,crypto,domain,store,service,httpapi,ratelimit,solver}`. Migrations are embedded SQL under `internal/store/migrations` and applied exactly once by `cmd/migrate`.
 
-The first implementation step is defined in the implementation plan. Do not put runtime secrets, API Keys, CDKs, database dumps, or solver credentials into this repository.
+## Frontend Quick Start
+
+```bash
+cd apps/web
+pnpm install
+pnpm dev          # http://localhost:5173, /v1 and /admin are proxied to :8000
+pnpm test         # vitest
+pnpm build        # production build to dist/
+```
+
+## Deployment
+
+`deploy/compose.yml` adds the API service on top of the PostgreSQL/Redis development stack. The API container builds from `apps/api/Dockerfile`, reads runtime configuration from the root `.env`, and exposes `:8000`. Serve the built web bundle behind a TLS-terminating reverse proxy that forwards `/v1`, `/admin`, and `/healthz` to the API. Production `APP_ENV=production` rejects placeholder secrets, localhost addresses, and `example.com` URLs at startup.
+
+Do not put runtime secrets, API Keys, CDKs, database dumps, or solver credentials into this repository.
