@@ -13,7 +13,9 @@ import (
 
 	"github.com/captchaflow/service-platform/api/internal/config"
 	"github.com/captchaflow/service-platform/api/internal/httpapi"
+	"github.com/captchaflow/service-platform/api/internal/ratelimit"
 	"github.com/captchaflow/service-platform/api/internal/service"
+	"github.com/captchaflow/service-platform/api/internal/solver"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
 
@@ -37,15 +39,18 @@ func main() {
 	}
 	defer pool.Close()
 
+	limiter := ratelimit.New(ctx, settings)
+	gateway := solver.NewGateway(settings)
 	services := service.NewServices(pool, settings)
-	handler := httpapi.NewRouter(services)
+	solveService := service.NewSolveService(pool, gateway, limiter, settings.SessionSecret)
+	handler := httpapi.NewRouter(services, solveService)
 
 	server := &http.Server{
 		Addr:              ":8000",
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       settings.SolverTotalTimeout + 10*time.Second,
+		WriteTimeout:      settings.SolverTotalTimeout + 15*time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	go func() {

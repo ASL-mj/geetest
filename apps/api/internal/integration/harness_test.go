@@ -43,6 +43,11 @@ func TestMain(m *testing.M) {
 		CDKPepper:            "test-cdk-pepper",
 		GeetestSolverURL:     "https://solver.test",
 		GeetestServiceAPIKey: "test-solver-key",
+		SolverConnectTimeout: 2 * time.Second,
+		SolverReadTimeout:    2 * time.Second,
+		SolverTotalTimeout:   2 * time.Second,
+		RateLimitPerMinute:   60,
+		ConcurrencyLimit:     4,
 	}
 
 	ctx := context.Background()
@@ -88,8 +93,13 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Tests assert on whole-table counts, so clear the mutable tables for
+	// isolation between tests and across suite runs.
+	if _, err := pool.Exec(ctx, `TRUNCATE quota_ledger, api_calls, cdks, cdk_batches, api_keys, users, user_sessions CASCADE`); err != nil {
+		t.Fatalf("reset tables: %v", err)
+	}
 	services := service.NewServices(pool, testSettings)
-	return &harness{t: t, handler: httpapi.NewRouter(services), services: services}
+	return &harness{t: t, handler: httpapi.NewRouter(services, nil), services: services}
 }
 
 // seedCDK inserts a CDK with optional field overrides and returns its code.

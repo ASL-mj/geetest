@@ -14,12 +14,14 @@ import (
 // Server carries the shared dependencies for all handlers.
 type Server struct {
 	services *service.Services
+	solve    *service.SolveService
 }
 
 // NewRouter builds the V1 route table. Go 1.22+ ServeMux patterns provide
-// method matching and path parameters.
-func NewRouter(services *service.Services) http.Handler {
-	server := &Server{services: services}
+// method matching and path parameters. The solve endpoint requires its own
+// service; passing nil omits it (useful for focused test routers).
+func NewRouter(services *service.Services, solve *service.SolveService) http.Handler {
+	server := &Server{services: services, solve: solve}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", server.handleHealthz)
@@ -29,6 +31,9 @@ func NewRouter(services *service.Services) http.Handler {
 	mux.HandleFunc("GET /v1/keys", server.requireUserSession(server.handleListKeys))
 	mux.HandleFunc("PATCH /v1/keys/{key_id}", server.requireUserSession(server.handleUpdateKey))
 	mux.HandleFunc("DELETE /v1/keys/{key_id}", server.requireUserSession(server.handleDeleteKey))
+	if solve != nil {
+		mux.HandleFunc("POST /v1/captcha/solve", server.handleSolve)
+	}
 
 	return mux
 }

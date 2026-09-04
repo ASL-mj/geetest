@@ -33,6 +33,12 @@ type Settings struct {
 	CDKPepper            string
 	GeetestSolverURL     string
 	GeetestServiceAPIKey string
+
+	SolverConnectTimeout time.Duration
+	SolverReadTimeout    time.Duration
+	SolverTotalTimeout   time.Duration
+	RateLimitPerMinute   int
+	ConcurrencyLimit     int
 }
 
 // Load reads the environment, applying defaults that match .env.example. When
@@ -51,6 +57,12 @@ func Load(envFile string) (Settings, error) {
 		CDKPepper:            getEnv("CDK_PEPPER", "change-me-cdk-pepper"),
 		GeetestSolverURL:     getEnv("GEETEST_SOLVER_URL", "https://solver.internal.example.com"),
 		GeetestServiceAPIKey: getEnv("GEETEST_SERVICE_API_KEY", "change-me-geetest-service-api-key"),
+
+		SolverConnectTimeout: time.Duration(getEnvInt("SOLVER_CONNECT_TIMEOUT_SECONDS", 10)) * time.Second,
+		SolverReadTimeout:    time.Duration(getEnvInt("SOLVER_READ_TIMEOUT_SECONDS", 120)) * time.Second,
+		SolverTotalTimeout:   time.Duration(getEnvInt("SOLVER_TOTAL_TIMEOUT_SECONDS", 130)) * time.Second,
+		RateLimitPerMinute:   getEnvInt("RATE_LIMIT_PER_MINUTE", 60),
+		ConcurrencyLimit:     getEnvInt("CONCURRENCY_LIMIT", 4),
 	}
 
 	if err := settings.validate(); err != nil {
