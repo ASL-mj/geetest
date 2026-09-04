@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     session_secret: str = Field(default="change-me-session-secret", alias="SESSION_SECRET")
+    session_ttl_seconds: int = Field(default=604800, alias="SESSION_TTL_SECONDS", ge=60)
     api_key_pepper: str = Field(default="change-me-api-key-pepper", alias="API_KEY_PEPPER")
     cdk_pepper: str = Field(default="change-me-cdk-pepper", alias="CDK_PEPPER")
     geetest_solver_url: str = Field(

@@ -5,6 +5,7 @@ description = "FastAPI backend for the GeeTest Service Platform"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.16.5,<2.0.0",
+  "argon2-cffi>=25.1.0,<26.0.0",
   "asyncpg>=0.30.0,<1.0.0",
   "fastapi>=0.116.1,<0.117.0",
   "psycopg[binary]>=3.2.9,<4.0.0",

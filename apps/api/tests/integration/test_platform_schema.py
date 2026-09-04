@@ -1,58 +1,20 @@
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from alembic import command
-from alembic.config import Config
 from app.domain.models import ApiCall, ApiKey, Cdk, CdkBatch, QuotaLedger, User
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
-API_ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(
     DATABASE_URL is None,
     reason="TEST_DATABASE_URL must point to an empty PostgreSQL database",
 )
-
-
-@pytest.fixture(scope="session")
-def migrated_engine() -> Iterator[Engine]:
-    assert DATABASE_URL is not None
-    control_engine = create_engine(DATABASE_URL)
-    with control_engine.begin() as connection:
-        connection.execute(text("CREATE ROLE geetest_platform_app NOLOGIN"))
-        connection.execute(
-            text(
-                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-                "GRANT UPDATE, DELETE ON TABLES TO geetest_platform_app"
-            )
-        )
-
-    alembic_config = Config(str(API_ROOT / "alembic.ini"))
-    alembic_config.set_main_option("sqlalchemy.url", DATABASE_URL)
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(DATABASE_URL)
-
-    yield engine
-
-    engine.dispose()
-    command.downgrade(alembic_config, "base")
-    with control_engine.begin() as connection:
-        connection.execute(
-            text(
-                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-                "REVOKE UPDATE, DELETE ON TABLES FROM geetest_platform_app"
-            )
-        )
-        connection.execute(text("DROP OWNED BY geetest_platform_app"))
-        connection.execute(text("DROP ROLE geetest_platform_app"))
-    control_engine.dispose()
 
 
 @pytest.fixture
