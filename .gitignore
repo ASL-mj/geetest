@@ -1,6 +1,11 @@
 .env
 .env.*
 !.env.example
+
+# Go
+bin/
+
+# Python (historical backend, removed)
 .venv/
 __pycache__/
 *.py[cod]
