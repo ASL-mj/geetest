@@ -15,7 +15,7 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings()
     app = FastAPI(
-        title="GeeTest Service Platform",
+        title="CaptchaFlow Service Platform",
         version="1.0.0",
     )
     app.state.settings = app_settings

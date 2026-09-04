@@ -1,8 +1,8 @@
-# GeeTest Service Platform V1 Implementation Plan
+# CaptchaFlow Service Platform V1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a self-hosted multi-user API platform that calls the existing GeeTest solver only from the backend, while enforcing CDK entitlement, shared quota, Key authentication, idempotency, and auditability.
+**Goal:** Build a self-hosted multi-user API platform branded as CaptchaFlow that calls the existing solver only from the backend, while enforcing CDK entitlement, shared quota, Key authentication, idempotency, and auditability.
 
 **Architecture:** Build a modular monolith with a FastAPI backend and a React web application. PostgreSQL is the source of truth for users, CDKs, Keys, calls and the append-only quota ledger; Redis supplies distributed rate limiting, concurrency leases and short duplicate-request waiting. `SolverGateway` is the only component allowed to call the existing GeeTest HTTP service.
 
@@ -87,7 +87,7 @@ from fastapi import FastAPI
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="GeeTest Service Platform", version="1.0.0")
+    app = FastAPI(title="CaptchaFlow Service Platform", version="1.0.0")
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict[str, str]:
@@ -195,7 +195,7 @@ async def test_activate_binds_cdk_creates_user_session_and_default_key(client, s
         "cdk": seeded_cdk.plaintext,
     })
     assert response.status_code == 201
-    assert response.json()["data"]["default_api_key"].startswith("gtsk_live_")
+    assert response.json()["data"]["default_api_key"].startswith("cf_live_")
     assert "session" in response.cookies
 ```
 
@@ -244,7 +244,7 @@ git commit -m "feat: add cdk activation and user sessions"
 async def test_new_key_is_returned_once_and_stored_as_hash(client, user_session, db):
     response = await client.post("/v1/keys", json={"name": "worker-a"})
     plaintext = response.json()["data"]["secret"]
-    assert plaintext.startswith("gtsk_live_")
+    assert plaintext.startswith("cf_live_")
     saved_key = await get_only_api_key(db)
     assert saved_key.key_hash != plaintext.encode()
     assert plaintext not in (await client.get("/v1/keys")).text
@@ -259,7 +259,7 @@ Expected: route-not-found failure.
 
 - [ ] **Step 3: Implement creation and display masking.**
 
-Generate 256-bit random secrets with the `gtsk_live_` prefix. Store an HMAC hash using `API_KEY_PEPPER`; store `key_prefix` and `key_last4` for display. Return `secret` only from `POST /v1/keys`; list and detail responses never include it.
+Generate 256-bit random secrets with the `cf_live_` prefix. Store an HMAC hash using `API_KEY_PEPPER`; store `key_prefix` and `key_last4` for display. Return `secret` only from `POST /v1/keys`; list and detail responses never include it.
 
 - [ ] **Step 4: Implement effective authorization.**
 
@@ -298,8 +298,8 @@ async def test_only_available_quota_requests_are_reserved(concurrent_solve_reque
 
 ```python
 async def test_same_idempotency_key_calls_solver_once(client, valid_headers, solver_mock):
-    first = await client.post("/v1/geetest/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
-    second = await client.post("/v1/geetest/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
+    first = await client.post("/v1/captcha/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
+    second = await client.post("/v1/captcha/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
     assert first.json() == second.json()
     assert solver_mock.call_count == 1
 ```
@@ -347,7 +347,7 @@ git commit -m "feat: add quota admission and idempotency"
 ```python
 async def test_solver_failure_refunds_reserved_quota(client, valid_headers, solver_returns_502):
     before = await quota_snapshot()
-    response = await client.post("/v1/geetest/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
+    response = await client.post("/v1/captcha/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
     after = await quota_snapshot()
     assert response.status_code == 502
     assert after.remaining == before.remaining
@@ -365,7 +365,7 @@ Expected: import failure.
 
 `GeeTestHttpSolver` accepts its base URL and service key only from `Settings`. It sends `Content-Type`, `X-Service-Key`, and platform `X-Request-ID`; uses explicit connect, read and total timeouts; maps timeout and transport failures to typed domain errors; never passes the downstream error body to an API response.
 
-- [ ] **Step 4: Implement `POST /v1/geetest/solve`.**
+- [ ] **Step 4: Implement `POST /v1/captcha/solve`.**
 
 Validate non-empty `captcha_id` and `risk_type == "slide"` before admission. Connect `AuthenticatedCaller`, idempotency, Redis admission, quota reservation, gateway call, settlement and redacted `api_calls` persistence in one application service.
 
@@ -414,7 +414,7 @@ Expected: route-not-found failure.
 
 - [ ] **Step 4: Implement the online debug endpoint.**
 
-`POST /v1/tools/geetest/solve` requires a user session and a selected owned Key ID. It invokes the same solve application service with `source="console"`; it never accepts or returns a plaintext API Key.
+`POST /v1/tools/captcha/solve` requires a user session and a selected owned Key ID. It invokes the same solve application service with `source="console"`; it never accepts or returns a plaintext API Key.
 
 - [ ] **Step 5: Verify user isolation and redaction.**
 
@@ -499,9 +499,9 @@ it("shows the new Key secret once and removes it after dismissal", async () => {
   render(<CreateKeyDialog />)
   await userEvent.type(screen.getByLabelText("Name"), "worker-a")
   await userEvent.click(screen.getByRole("button", { name: "Create Key" }))
-  expect(await screen.findByText("gtsk_live_test_secret")).toBeVisible()
+  expect(await screen.findByText("cf_live_test_secret")).toBeVisible()
   await userEvent.click(screen.getByRole("button", { name: "Done" }))
-  expect(screen.queryByText("gtsk_live_test_secret")).not.toBeInTheDocument()
+  expect(screen.queryByText("cf_live_test_secret")).not.toBeInTheDocument()
 })
 ```
 
@@ -595,7 +595,7 @@ git commit -m "feat: add administrator console"
 
 ```python
 def test_openapi_declares_public_solve_auth_and_idempotency(client) -> None:
-    operation = client.get("/openapi.json").json()["paths"]["/v1/geetest/solve"]["post"]
+    operation = client.get("/openapi.json").json()["paths"]["/v1/captcha/solve"]["post"]
     assert "Authorization" in operation["parameters"][0]["name"]
     assert any(item["name"] == "Idempotency-Key" for item in operation["parameters"])
 ```
@@ -640,10 +640,10 @@ git commit -m "docs: add platform api and deployment contract"
 
 ```python
 async def test_solver_failure_creates_exactly_one_refund_and_no_sensitive_log(client, valid_headers, solver_timeout):
-    response = await client.post("/v1/geetest/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
+    response = await client.post("/v1/captcha/solve", headers=valid_headers, json={"captcha_id": "c1", "risk_type": "slide"})
     assert response.status_code == 504
     assert await count_ledger_entries(entry_type="REFUND") == 1
-    assert "gtsk_live_" not in await serialized_call_log(response.json()["request_id"])
+    assert "cf_live_" not in await serialized_call_log(response.json()["request_id"])
 ```
 
 Cover the following invariants: browser bundle has no solver address or service key; cross-user reads fail; exhausted CDKs do not reach the solver; three concurrent calls with quota two produce at most two solver calls; repeated idempotency keys settle once; every administrator write produces an audit row.

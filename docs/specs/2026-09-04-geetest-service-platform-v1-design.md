@@ -1,4 +1,4 @@
-# GeeTest 验证码服务平台 V1 设计规格
+# CaptchaFlow 验证码服务平台 V1 设计规格
 
 **状态：** 已确认产品方案，待进入实施计划  
 **日期：** 2026-09-04  
@@ -6,13 +6,13 @@
 
 ## 1. 目标与范围
 
-将现有无状态 GeeTest 解析服务封装为一个多用户开发者平台。平台对外提供用户 API Key 和统一的解析接口，并负责 CDK 激活/再次进入、配额、限流、幂等、调用审计和管理员运营。
+将现有无状态解析服务封装为一个多用户开发者平台。平台对外以 CaptchaFlow 品牌提供用户 API Key 和统一的验证码解析接口，并负责 CDK 激活/再次进入、配额、限流、幂等、调用审计和管理员运营。
 
 V1 交付以下能力：
 
 - CDK 激活、CDK 再次进入、退出会话；不设置用户密码；
 - 用户 API Key 的创建、重命名、启用、禁用和删除；
-- 单一 `slide` 类型的 GeeTest 解析接口；
+- 单一 `slide` 类型的验证码解析接口；
 - 用户/CDK 维度共享的调用额度、每分钟速率和并发限制；
 - 不可变配额流水、调用日志和管理员操作审计；
 - 用户控制台、管理员后台、接口文档和在线调试；
@@ -26,7 +26,7 @@ V1 不包含在线支付、自动续费、多验证码类型、团队与子账�
 用户程序 / 用户端浏览器 / 管理员浏览器
                  |
                  v
-      GeeTest 服务平台业务后端
+      CaptchaFlow 服务平台业务后端
        |        |          |
  PostgreSQL   Redis   平台前端/管理端
        |
@@ -105,7 +105,7 @@ V1 不包含在线支付、自动续费、多验证码类型、团队与子账�
 | 配额流水 | 变动前、变动值、变动后、类型、原因、请求 ID | 查询。 |
 | 系统设置 | 默认额度、Key 上限、默认速率、默认并发、公告、平台地址 | 修改设置。 |
 | 管理员审计 | 管理员、操作、目标、原因、前后值、IP、时间 | 查询。 |
-| GeeTest 服务状态 | 健康、最近检查、延迟、失败次数 | 手动检查。 |
+| 解析服务状态 | 健康、最近检查、延迟、失败次数 | 手动检查。 |
 
 管理员的禁用、作废、额度调整和系统设置修改必须要求确认，并要求填写可审计原因。
 
@@ -190,7 +190,7 @@ RECEIVED -> RESERVED -> DISPATCHED -> SUCCEEDED
 - 所有时间均为 ISO 8601 UTC 时间戳。
 - 日志列表使用 `cursor` 和 `limit`，`limit` 最大 100。
 - 成功与失败响应都包含平台 `request_id`。
-- 公开解析接口的 Key 格式为 `gtsk_live_<random>`。
+- 公开解析接口的 Key 格式为 `cf_live_<random>`。
 
 ### 9.2 用户会话接口
 
@@ -206,13 +206,13 @@ RECEIVED -> RESERVED -> DISPATCHED -> SUCCEEDED
 | GET | `/v1/keys` | 用户会话。 |
 | PATCH | `/v1/keys/{key_id}` | 用户会话。 |
 | DELETE | `/v1/keys/{key_id}` | 用户会话。 |
-| POST | `/v1/tools/geetest/solve` | 用户会话。 |
+| POST | `/v1/tools/captcha/solve` | 用户会话。 |
 
 ### 9.3 公开解析接口
 
 ```http
-POST /v1/geetest/solve
-Authorization: Bearer gtsk_live_xxx
+POST /v1/captcha/solve
+Authorization: Bearer cf_live_xxx
 Content-Type: application/json
 Idempotency-Key: UNIQUE_REQUEST_ID
 ```

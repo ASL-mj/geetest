@@ -6,7 +6,9 @@ describe('App', () => {
   it('renders the public home as the default entry view', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /把 GeeTest 解析/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /把验证码解析/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CaptchaFlow Service Platform' })).toBeInTheDocument();
+    expect(screen.queryByText(/GeeTest/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /CDK 激活 \/ 登录/ })).toBeInTheDocument();
     expect(screen.getByText('从 CDK 激活到第一次调用，只需要三步')).toBeInTheDocument();
   });
@@ -43,10 +45,13 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /查看 API 文档/ }));
     expect(screen.getByRole('heading', { name: '接入文档' })).toBeInTheDocument();
+    expect(screen.getByText('CaptchaFlow API V1')).toBeInTheDocument();
+    expect(screen.getByText(/\/v1\/captcha\/solve/)).toBeInTheDocument();
+    expect(screen.queryByText(/GeeTest/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '登录 / 激活' }));
     expect(screen.getByRole('heading', { name: '使用 CDK 进入平台' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'GeeTest Service Platform' }));
+    fireEvent.click(screen.getByRole('button', { name: 'CaptchaFlow Service Platform' }));
     fireEvent.click(screen.getByRole('button', { name: '管理员入口' }));
     expect(screen.getByRole('heading', { name: '数据概览' })).toBeInTheDocument();
     expect(screen.getByText('管理员后台')).toBeInTheDocument();

@@ -1,6 +1,6 @@
-# GeeTest Service Platform
+# CaptchaFlow Service Platform
 
-GeeTest Service Platform is a multi-user developer platform placed in front of an already deployed, stateless GeeTest solver. The platform owns CDK activation, user sessions, user API Keys, shared quota, rate and concurrency limits, idempotent invocation, call logs, and administrator operations.
+CaptchaFlow Service Platform is a multi-user developer platform for integrating a stable captcha-solving API. The platform owns CDK activation, user sessions, user API Keys, shared quota, rate and concurrency limits, idempotent invocation, call logs, and administrator operations.
 
 The underlying solver is an internal dependency. This repository must not modify its algorithm, expose its address to browser clients, or store its service key outside server-side runtime configuration.
 

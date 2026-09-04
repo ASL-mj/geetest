@@ -86,7 +86,7 @@ def test_new_key_is_returned_once_and_stored_as_hash(
 
     assert response.status_code == 201
     secret = response.json()["data"]["secret"]
-    assert secret.startswith("gtsk_live_")
+    assert secret.startswith("cf_live_")
     listing = client.get("/v1/keys")
     assert listing.status_code == 200
     assert secret not in listing.text

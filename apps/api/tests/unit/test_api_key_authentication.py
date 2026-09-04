@@ -27,7 +27,7 @@ def active_entities() -> tuple[ApiKey, User, Cdk]:
         id=uuid4(),
         user_id=user.id,
         name="worker",
-        key_prefix="gtsk_live_abc",
+        key_prefix="cf_live_abc",
         key_last4="abcd",
         key_hash=b"k" * 32,
         status="ACTIVE",

@@ -17,7 +17,7 @@ class CreatedApiKey:
 def create_api_key(
     session: Session, settings: Settings, *, user_id: UUID, name: str
 ) -> CreatedApiKey:
-    secret = f"gtsk_live_{generate_opaque_token()}"
+    secret = f"cf_live_{generate_opaque_token()}"
     record = ApiKey(
         user_id=user_id,
         name=name,

@@ -69,9 +69,9 @@ const recentCalls = [
 ];
 
 const apiKeys = [
-  { name: '生产环境', prefix: 'gtsk_live_7Qm...', suffix: '28f9', state: '已启用', tone: 'success' as const, calls: '3,842', lastUsed: '刚刚', created: '2026-08-21' },
-  { name: 'Worker A', prefix: 'gtsk_live_4Lb...', suffix: 'c320', state: '已启用', tone: 'success' as const, calls: '1,209', lastUsed: '4 分钟前', created: '2026-08-28' },
-  { name: '回归测试', prefix: 'gtsk_live_0Zr...', suffix: 'a7cd', state: '已禁用', tone: 'neutral' as const, calls: '421', lastUsed: '昨天 16:20', created: '2026-08-29' },
+  { name: '生产环境', prefix: 'cf_live_7Qm...', suffix: '28f9', state: '已启用', tone: 'success' as const, calls: '3,842', lastUsed: '刚刚', created: '2026-08-21' },
+  { name: 'Worker A', prefix: 'cf_live_4Lb...', suffix: 'c320', state: '已启用', tone: 'success' as const, calls: '1,209', lastUsed: '4 分钟前', created: '2026-08-28' },
+  { name: '回归测试', prefix: 'cf_live_0Zr...', suffix: 'a7cd', state: '已禁用', tone: 'neutral' as const, calls: '421', lastUsed: '昨天 16:20', created: '2026-08-29' },
 ];
 
 const usageBars = [42, 58, 47, 74, 64, 86, 71, 93, 82, 69, 88, 97];
@@ -158,11 +158,11 @@ function Dashboard({ goTo }: { goTo: (page: PageId) => void }) {
         <article className="surface endpoint-surface">
           <SectionHeading title="接入地址" detail="通过平台 API 调用解析服务" />
           <div className="endpoint-row">
-            <code>POST /v1/geetest/solve</code>
-            <CopyButton compact label="复制接口地址" text="https://api.your-domain.com/v1/geetest/solve" />
+            <code>POST /v1/captcha/solve</code>
+            <CopyButton compact label="复制接口地址" text="https://api.your-domain.com/v1/captcha/solve" />
           </div>
-          <pre aria-label="请求示例"><code>{`curl -X POST https://api.your-domain.com/v1/geetest/solve \\
-  -H "Authorization: Bearer gtsk_live_..." \\
+          <pre aria-label="请求示例"><code>{`curl -X POST https://api.your-domain.com/v1/captcha/solve \\
+  -H "Authorization: Bearer cf_live_..." \\
   -H "Idempotency-Key: request-unique-id"`}</code></pre>
           <div className="endpoint-footer"><Code2 aria-hidden="true" size={16} /><span>认证、额度和调用审计由平台统一处理</span></div>
         </article>
@@ -241,7 +241,7 @@ function DebugPage() {
       <article className="surface form-surface">
         <SectionHeading title="请求参数" detail="调试请求与公开 API 使用相同的 Key、额度和审计规则。" />
         <label htmlFor="debug-key">API Key</label>
-        <select defaultValue="production" id="debug-key"><option value="production">生产环境 · gtsk_live_7Qm...28f9</option><option value="worker">Worker A · gtsk_live_4Lb...c320</option></select>
+        <select defaultValue="production" id="debug-key"><option value="production">生产环境 · cf_live_7Qm...28f9</option><option value="worker">Worker A · cf_live_4Lb...c320</option></select>
         <label htmlFor="captcha-id">Captcha ID</label>
         <input id="captcha-id" placeholder="输入 Captcha ID" />
         <label htmlFor="risk-type">Risk Type</label>
@@ -298,8 +298,8 @@ function CallsPage() {
 }
 
 function DocsPage() {
-  const snippet = `curl -X POST https://api.your-domain.com/v1/geetest/solve \\
-  -H "Authorization: Bearer gtsk_live_your_key" \\
+  const snippet = `curl -X POST https://api.your-domain.com/v1/captcha/solve \\
+  -H "Authorization: Bearer cf_live_your_key" \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: your-unique-request-id" \\
   -d '{"captcha_id":"captcha_id","risk_type":"slide"}'`;
@@ -328,7 +328,7 @@ function AccountPage() {
 function CreateKeyDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [created, setCreated] = useState(false);
-  const key = 'gtsk_live_7PmKX5nQ3Wv1Zc8T6aR4dH2s';
+  const key = 'cf_live_7PmKX5nQ3Wv1Zc8T6aR4dH2s';
   return (
     <div className="dialog-backdrop" role="presentation">
       <section aria-labelledby="create-key-title" aria-modal="true" className="dialog" role="dialog">
@@ -387,7 +387,7 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand__mark"><ShieldCheck aria-hidden="true" size={21} /></span><span>GeeTest<br /><b>Service Platform</b></span></div>
+        <div className="brand"><span className="brand__mark"><ShieldCheck aria-hidden="true" size={21} /></span><span>CaptchaFlow<br /><b>Service Platform</b></span></div>
         <div className="workspace-label">用户控制台</div>
         <nav aria-label="主导航">
           {navigation.map((item) => {
@@ -399,7 +399,7 @@ export function App() {
       </aside>
       <div className="app-main">
         <header className="topbar"><div className="breadcrumb"><span>用户控制台</span><ChevronRight aria-hidden="true" size={15} /><b>{activeTitle.title}</b></div><div className="topbar__actions"><StatusPill tone="success">平台服务正常</StatusPill><button className="profile-button" onClick={() => setActivePage('account')} type="button"><span className="avatar avatar--small">C</span><span>CDK 用户</span></button></div></header>
-        <main className="content"><div className="page-title"><div><p className="eyebrow">GEE TEST SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{activePage === 'dashboard' && <button className="primary-button" onClick={() => setShowCreateDialog(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}{activePage === 'keys' && <button className="primary-button page-title__button" onClick={() => setShowCreateDialog(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
+        <main className="content"><div className="page-title"><div><p className="eyebrow">CAPTCHA SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{activePage === 'dashboard' && <button className="primary-button" onClick={() => setShowCreateDialog(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}{activePage === 'keys' && <button className="primary-button page-title__button" onClick={() => setShowCreateDialog(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
       </div>
       {showCreateDialog && <CreateKeyDialog onClose={() => setShowCreateDialog(false)} />}
     </div>

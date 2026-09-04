@@ -98,7 +98,7 @@ def test_activate_binds_cdk_creates_user_session_and_default_key(
     assert response.status_code == 201
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["default_api_key"].startswith("gtsk_live_")
+    assert body["data"]["default_api_key"].startswith("cf_live_")
     session_token = response.cookies.get("session")
     assert session_token is not None
     set_cookie = response.headers["set-cookie"].lower()
