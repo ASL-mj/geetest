@@ -9,27 +9,46 @@ import (
 
 // Ledger entry types per the V1 quota model.
 const (
-	EntryReserve = "RESERVE"
-	EntryConfirm = "CONFIRM"
-	EntryRefund  = "REFUND"
+	EntryReserve         = "RESERVE"
+	EntryConfirm         = "CONFIRM"
+	EntryRefund          = "REFUND"
+	EntryAdminAdjustment = "ADMIN_ADJUSTMENT"
 )
 
 // ErrQuotaExhausted is the typed signal from ReserveQuota when no row was
 // updated because quota_remaining hit zero.
 var ErrQuotaExhausted = errors.New("no remaining quota")
 
-// QuotaSnapshot captures the three counters around a ledger mutation.
+// QuotaSnapshot captures the quota counters around a ledger mutation.
 type QuotaSnapshot struct {
 	Remaining int64
 	Used      int64
 	Reserved  int64
+	Total     int64
 }
 
 func readQuota(ctx context.Context, q Querier, cdkID uuid.UUID) (QuotaSnapshot, error) {
 	var snap QuotaSnapshot
-	err := q.QueryRow(ctx, `SELECT quota_remaining, quota_used, quota_reserved FROM cdks WHERE id = $1`, cdkID).
-		Scan(&snap.Remaining, &snap.Used, &snap.Reserved)
+	err := q.QueryRow(ctx, `SELECT quota_remaining, quota_used, quota_reserved, quota_total FROM cdks WHERE id = $1`, cdkID).
+		Scan(&snap.Remaining, &snap.Used, &snap.Reserved, &snap.Total)
 	return snap, err
+}
+
+// InsertQuotaLedgerEntry appends an operator ledger row (e.g.
+// ADMIN_ADJUSTMENT) without touching counters; the caller performs the
+// counter update inside the same transaction. userID may be nil for CDKs
+// that no user has activated yet.
+func InsertQuotaLedgerEntry(ctx context.Context, q Querier, cdkID uuid.UUID, userID *uuid.UUID, adminID uuid.UUID, after QuotaSnapshot, delta int64, entryType, reason string) error {
+	_, err := q.Exec(ctx, `
+		INSERT INTO quota_ledger (id, cdk_id, user_id, entry_type,
+		                          available_before, delta_available, available_after,
+		                          used_before, used_after, reserved_before, reserved_after,
+		                          reason, request_id, actor_type, actor_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $9, $10, $11, 'admin', $12)
+	`, uuid.New(), cdkID, userID, entryType,
+		after.Remaining-delta, delta, after.Remaining, after.Used, after.Reserved,
+		reason, "admin:"+adminID.String(), adminID)
+	return err
 }
 
 // ReserveQuota atomically moves one unit remaining -> reserved and appends a

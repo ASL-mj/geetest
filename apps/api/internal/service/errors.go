@@ -73,3 +73,18 @@ func ErrQuotaExhausted() *ApplicationError {
 func ErrInvalidRequest() *ApplicationError {
 	return NewError(422, "INVALID_REQUEST", "Request validation failed.")
 }
+func ErrAdminAuthFailed() *ApplicationError {
+	return NewError(401, "ADMIN_AUTH_FAILED", "Administrator credentials are invalid.")
+}
+func ErrAdminSessionInvalid() *ApplicationError {
+	return NewError(401, "ADMIN_SESSION_INVALID", "Administrator session is invalid or expired.")
+}
+func ErrAdminForbidden() *ApplicationError {
+	return NewError(403, "ADMIN_FORBIDDEN", "Administrator role cannot perform this action.")
+}
+func ErrUserNotFound() *ApplicationError {
+	return NewError(404, "USER_NOT_FOUND", "User was not found.")
+}
+func ErrNotFound() *ApplicationError {
+	return NewError(404, "NOT_FOUND", "Resource was not found.")
+}

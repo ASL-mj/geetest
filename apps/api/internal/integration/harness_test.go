@@ -48,6 +48,7 @@ func TestMain(m *testing.M) {
 		SolverTotalTimeout:   2 * time.Second,
 		RateLimitPerMinute:   60,
 		ConcurrencyLimit:     4,
+		AdminSessionTTL:      time.Hour,
 	}
 
 	ctx := context.Background()

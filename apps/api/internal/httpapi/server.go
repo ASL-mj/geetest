@@ -9,6 +9,7 @@ import (
 
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/service"
+	"github.com/captchaflow/service-platform/api/internal/store"
 )
 
 // Server carries the shared dependencies for all handlers.
@@ -38,6 +39,20 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	if solve != nil {
 		mux.HandleFunc("POST /v1/captcha/solve", server.handleSolve)
 	}
+
+	// Administrator surface: /admin/v1 with its own session cookie and RBAC.
+	mux.HandleFunc("POST /admin/v1/auth/login", server.handleAdminLogin)
+	mux.HandleFunc("POST /admin/v1/auth/logout", server.requireAdminAny(server.handleAdminLogout))
+	mux.HandleFunc("GET /admin/v1/dashboard", server.requireAdminAny(server.handleAdminDashboard))
+	mux.HandleFunc("POST /admin/v1/cdk-batches", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminCreateBatch))
+	mux.HandleFunc("GET /admin/v1/cdk-batches", server.requireAdminAny(server.handleAdminListBatches))
+	mux.HandleFunc("GET /admin/v1/cdks", server.requireAdminAny(server.handleAdminListCdks))
+	mux.HandleFunc("POST /admin/v1/cdks/{cdk_id}/quota-adjustments", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminAdjustQuota))
+	mux.HandleFunc("PATCH /admin/v1/cdks/{cdk_id}", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetCdkStatus))
+	mux.HandleFunc("GET /admin/v1/users", server.requireAdminAny(server.handleAdminListUsers))
+	mux.HandleFunc("PATCH /admin/v1/users/{user_id}", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetUserStatus))
+	mux.HandleFunc("GET /admin/v1/audit-logs", server.requireAdminAny(server.handleAdminListAuditLogs))
+	mux.HandleFunc("GET /admin/v1/solver-health", server.requireAdminAny(server.handleAdminSolverHealth))
 
 	return mux
 }

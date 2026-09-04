@@ -39,6 +39,10 @@ type Settings struct {
 	SolverTotalTimeout   time.Duration
 	RateLimitPerMinute   int
 	ConcurrencyLimit     int
+
+	AdminSessionTTL time.Duration
+	AdminUsername   string
+	AdminPassword   string
 }
 
 // Load reads the environment, applying defaults that match .env.example. When
@@ -63,6 +67,10 @@ func Load(envFile string) (Settings, error) {
 		SolverTotalTimeout:   time.Duration(getEnvInt("SOLVER_TOTAL_TIMEOUT_SECONDS", 130)) * time.Second,
 		RateLimitPerMinute:   getEnvInt("RATE_LIMIT_PER_MINUTE", 60),
 		ConcurrencyLimit:     getEnvInt("CONCURRENCY_LIMIT", 4),
+
+		AdminSessionTTL: time.Duration(getEnvInt("ADMIN_SESSION_TTL_SECONDS", 86400)) * time.Second,
+		AdminUsername:   os.Getenv("ADMIN_BOOTSTRAP_USERNAME"),
+		AdminPassword:   os.Getenv("ADMIN_BOOTSTRAP_PASSWORD"),
 	}
 
 	if err := settings.validate(); err != nil {
