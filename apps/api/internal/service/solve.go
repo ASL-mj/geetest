@@ -176,8 +176,11 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 		// is logged for reconciliation rather than failing the response.
 		slog.Error("quota confirm failed", "request_id", requestID, "error", err)
 	}
-	if err := store.CompleteAPICallSuccess(ctx, s.pool, callID, responseJSON, duration); err != nil {
+	if err := store.CompleteAPICallSuccess(ctx, s.pool, callID, duration); err != nil {
 		slog.Error("complete success failed", "request_id", requestID, "error", err)
+	}
+	if err := store.SaveIdempotencyResponse(ctx, s.pool, callID, caller.UserID, responseJSON); err != nil {
+		slog.Error("save idempotency response failed", "request_id", requestID, "error", err)
 	}
 	return SolveOutcome{RequestID: requestID, Result: result}
 }
@@ -185,9 +188,14 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 // replayOutcome serves a stored terminal response or flags in-progress.
 func (s *SolveService) replayOutcome(existing store.APICall) SolveOutcome {
 	if existing.Status == store.CallStatusSucceeded {
-		var result solver.SolveResult
-		if err := json.Unmarshal(existing.ResponseJSON, &result); err == nil && result.CaptchaOutput != "" {
-			return SolveOutcome{RequestID: existing.RequestID, Replayed: true, Result: &result}
+		payload, err := store.GetIdempotencyResponse(context.Background(), s.pool, existing.ID)
+		if err == nil {
+			var result solver.SolveResult
+			if json.Unmarshal(payload, &result) == nil && result.CaptchaOutput != "" {
+				return SolveOutcome{RequestID: existing.RequestID, Replayed: true, Result: &result}
+			}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			slog.Error("idempotency response lookup failed", "request_id", existing.RequestID, "error", err)
 		}
 	}
 	// RECEIVED/RESERVED/DISPATCHED or unusable payload: still executing.

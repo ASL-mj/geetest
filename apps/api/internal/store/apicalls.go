@@ -42,7 +42,6 @@ type APICall struct {
 	DurationMS           *int
 	QuotaReserved        bool
 	QuotaRefunded        bool
-	ResponseJSON         json.RawMessage
 	ClientIPMasked       string
 	ClientIPHash         []byte
 	UserAgent            string
@@ -52,7 +51,7 @@ const apiCallColumns = `
 	id, request_id, operation, idempotency_key_hash, user_id, cdk_id, api_key_id,
 	api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type, status,
 	http_status, error_code, error_summary, accepted_at, completed_at, duration_ms,
-	quota_reserved, quota_refunded, response_json
+	quota_reserved, quota_refunded
 `
 
 func scanAPICall(row pgx.Row) (APICall, error) {
@@ -61,7 +60,7 @@ func scanAPICall(row pgx.Row) (APICall, error) {
 		&call.ID, &call.RequestID, &call.Operation, &call.IdempotencyKeyHash, &call.UserID, &call.CDKID, &call.APIKeyID,
 		&call.APIKeyNameSnapshot, &call.APIKeyPrefixSnapshot, &call.CaptchaID, &call.RiskType, &call.Status,
 		&call.HTTPStatus, &call.ErrorCode, &call.ErrorSummary, &call.AcceptedAt, &call.CompletedAt, &call.DurationMS,
-		&call.QuotaReserved, &call.QuotaRefunded, &call.ResponseJSON,
+		&call.QuotaReserved, &call.QuotaRefunded,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -137,14 +136,40 @@ func DispatchAPICall(ctx context.Context, q Querier, callID uuid.UUID) error {
 	return err
 }
 
-// CompleteAPICallSuccess stores the terminal success state with the response.
-func CompleteAPICallSuccess(ctx context.Context, q Querier, callID uuid.UUID, responseJSON json.RawMessage, duration time.Duration) error {
+// CompleteAPICallSuccess stores the terminal success state.
+func CompleteAPICallSuccess(ctx context.Context, q Querier, callID uuid.UUID, duration time.Duration) error {
 	_, err := q.Exec(ctx, `
 		UPDATE api_calls
-		SET status = $2, http_status = 200, completed_at = now(), duration_ms = $3, response_json = $4
+		SET status = $2, http_status = 200, completed_at = now(), duration_ms = $3
 		WHERE id = $1
-	`, callID, CallStatusSucceeded, duration.Milliseconds(), responseJSON)
+	`, callID, CallStatusSucceeded, duration.Milliseconds())
 	return err
+}
+
+// SaveIdempotencyResponse stores the replay payload for a succeeded call, in
+// its own table so the call log never carries the full solver result.
+func SaveIdempotencyResponse(ctx context.Context, q Querier, callID, userID uuid.UUID, responseJSON json.RawMessage) error {
+	_, err := q.Exec(ctx, `
+		INSERT INTO idempotency_responses (api_call_id, user_id, response_json)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (api_call_id) DO NOTHING
+	`, callID, userID, responseJSON)
+	return err
+}
+
+// GetIdempotencyResponse loads the stored replay payload for one call.
+func GetIdempotencyResponse(ctx context.Context, q Querier, callID uuid.UUID) (json.RawMessage, error) {
+	var payload json.RawMessage
+	err := q.QueryRow(ctx,
+		`SELECT response_json FROM idempotency_responses WHERE api_call_id = $1`, callID,
+	).Scan(&payload)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return payload, nil
 }
 
 // CompleteAPICallFailure stores the terminal failure state; refunded reports
