@@ -207,6 +207,26 @@ func CompleteRecoveredAPICallFailure(ctx context.Context, q Querier, callID uuid
 // being reversed. Plain RECEIVED rows may have never consumed a key or quota
 // and are left alone for normal request cleanup.
 func SweepStaleInFlightCalls(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int, error) {
+	// Startup recovery can run concurrently during a rolling restart. A
+	// database advisory lock makes the select/claim/refund sequence single
+	// owner across all API processes without adding a schema column or leaving
+	// a lock behind after a crashed process.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('captchaflow.stale-sweep', 0))`).Scan(&locked); err != nil {
+		return 0, err
+	}
+	if !locked {
+		return 0, nil
+	}
+	defer func() {
+		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended('captchaflow.stale-sweep', 0))`)
+	}()
+
 	rows, err := pool.Query(ctx, `
 		SELECT a.id
 		FROM api_calls a

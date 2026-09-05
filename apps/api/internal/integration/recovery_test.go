@@ -60,12 +60,27 @@ func TestSweepStaleConfirmedCallReversesSettlement(t *testing.T) {
 		t.Fatalf("age call: %v", err)
 	}
 
-	reaped, err := store.SweepStaleInFlightCalls(ctx, h.services.Pool, time.Minute)
-	if err != nil {
-		t.Fatalf("sweep stale call: %v", err)
+	type sweepResult struct {
+		count int
+		err   error
 	}
-	if reaped != 1 {
-		t.Fatalf("expected one reaped call, got %d", reaped)
+	results := make(chan sweepResult, 2)
+	for range 2 {
+		go func() {
+			count, err := store.SweepStaleInFlightCalls(ctx, h.services.Pool, time.Minute)
+			results <- sweepResult{count: count, err: err}
+		}()
+	}
+	totalReaped := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("sweep stale call: %v", result.err)
+		}
+		totalReaped += result.count
+	}
+	if totalReaped != 1 {
+		t.Fatalf("concurrent sweeps must reap one call total, got %d", totalReaped)
 	}
 
 	summary, err := store.GetCDKSummaryForUser(ctx, h.services.Pool, caller.UserID)
