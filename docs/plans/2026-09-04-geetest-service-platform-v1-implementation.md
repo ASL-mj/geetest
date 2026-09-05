@@ -1,5 +1,25 @@
 # CaptchaFlow Service Platform V1 Implementation Plan
 
+> **Current implementation baseline (2026-09-05):** The repository has been
+> delivered as a Go 1.25 modular monolith with a React 19/Vite console. The
+> original Python/FastAPI and TanStack examples below are retained as the
+> historical execution draft only; use `README.md`, `apps/api`, and
+> `apps/web` as the authoritative implementation paths. Tasks 1-9 and the
+> core of Task 10 are implemented and committed. The next delivery slice is
+> the remaining administrator read surfaces (API Keys, calls, quota ledger),
+> OpenAPI/deployment hardening, and browser-based release acceptance.
+
+## Current Delivery Checklist
+
+- [x] Platform runtime, migrations, Docker Compose, Makefile and secret boundary.
+- [x] CDK activation/re-entry sessions without user passwords.
+- [x] API Key lifecycle, shared quota, rate/concurrency limits and idempotency.
+- [x] Solver gateway proxy, redacted call logs, user console and public docs.
+- [x] Administrator authentication, CDK batches/CDKs, users, audit, health and settings UI.
+- [x] Quota settlement recovery, transition-failure cleanup, JSON strict decoding and route synchronization.
+- [ ] Administrator API Key/call-log/quota-ledger query pages and filters.
+- [ ] OpenAPI contract, production reverse proxy and CI/release acceptance gates.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a self-hosted multi-user API platform branded as CaptchaFlow that calls the existing solver only from the backend, while enforcing CDK entitlement, shared quota, Key authentication, idempotency, and auditability.
