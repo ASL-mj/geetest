@@ -172,15 +172,21 @@ func ListCdkBatches(ctx context.Context, q Querier, limit int) ([]CdkBatchSummar
 	return batches, rows.Err()
 }
 
-// CreateCdk inserts one generated CDK in UNACTIVATED state; only the hash
-// and prefix persist, never the plaintext code. Expiry is computed at
-// activation from the batch service duration.
-func CreateCdk(ctx context.Context, q Querier, batchID uuid.UUID, codePrefix string, codeHash []byte, quota int64, activationDeadline *time.Time) error {
+// CreateCdk inserts one generated CDK in UNACTIVATED state. The AES-GCM
+// ciphertext keeps the plaintext recoverable for operators; expiry is
+// computed at activation from the batch service duration.
+func CreateCdk(ctx context.Context, q Querier, batchID uuid.UUID, codePrefix string, codeHash, codeCiphertext []byte, quota int64, activationDeadline *time.Time, remark *string) error {
 	_, err := q.Exec(ctx, `
-		INSERT INTO cdks (id, batch_id, code_prefix, code_hash, status,
+		INSERT INTO cdks (id, batch_id, code_prefix, code_hash, code_ciphertext, remark, status,
 		                  activation_deadline, quota_total, quota_used, quota_reserved, quota_remaining)
-		VALUES ($1, $2, $3, $4, 'UNACTIVATED', $5, $6, 0, 0, $6)
-	`, uuid.New(), batchID, codePrefix, codeHash, activationDeadline, quota)
+		VALUES ($1, $2, $3, $4, $5, $6, 'UNACTIVATED', $7, $8, 0, 0, $8)
+	`, uuid.New(), batchID, codePrefix, codeHash, codeCiphertext, remark, activationDeadline, quota)
+	return err
+}
+
+// UpdateCdkRemark rewrites the operator note on one CDK.
+func UpdateCdkRemark(ctx context.Context, q Querier, cdkID uuid.UUID, remark string) error {
+	_, err := q.Exec(ctx, `UPDATE cdks SET remark = $2, updated_at = now() WHERE id = $1`, cdkID, remark)
 	return err
 }
 
@@ -191,6 +197,9 @@ type AdminCdk struct {
 	CodePrefix     string
 	Status         string
 	BoundUserID    *uuid.UUID
+	BoundUserState *string
+	Remark         *string
+	BatchName      string
 	ExpiresAt      *time.Time
 	QuotaTotal     int64
 	QuotaUsed      int64
@@ -200,20 +209,25 @@ type AdminCdk struct {
 	CreatedAt      time.Time
 }
 
-// ListCdks returns operator-visible CDK rows, newest first.
+// ListCdks returns operator-visible CDK rows, newest first, with the batch
+// name and bound-user status joined for the merged management view.
 func ListCdks(ctx context.Context, q Querier, batchID *uuid.UUID, status string, limit int) ([]AdminCdk, error) {
 	sql := `
-		SELECT id, batch_id, code_prefix, status, bound_user_id, expires_at,
-		       quota_total, quota_used, quota_reserved, quota_remaining, activated_at, created_at
-		FROM cdks WHERE true`
+		SELECT c.id, c.batch_id, c.code_prefix, c.status, c.bound_user_id, u.status, c.remark,
+		       COALESCE(b.name, ''), c.expires_at,
+		       c.quota_total, c.quota_used, c.quota_reserved, c.quota_remaining, c.activated_at, c.created_at
+		FROM cdks c
+		LEFT JOIN cdk_batches b ON b.id = c.batch_id
+		LEFT JOIN users u ON u.id = c.bound_user_id
+		WHERE true`
 	args := []any{}
 	if batchID != nil {
 		args = append(args, *batchID)
-		sql += ` AND batch_id = $` + itoa(len(args))
+		sql += ` AND c.batch_id = $` + itoa(len(args))
 	}
 	if status != "" {
 		args = append(args, status)
-		sql += ` AND status = $` + itoa(len(args))
+		sql += ` AND c.status = $` + itoa(len(args))
 	}
 	args = append(args, limit)
 	sql += ` ORDER BY created_at DESC LIMIT $` + itoa(len(args))
@@ -228,13 +242,54 @@ func ListCdks(ctx context.Context, q Querier, batchID *uuid.UUID, status string,
 	for rows.Next() {
 		var cdk AdminCdk
 		if err := rows.Scan(&cdk.ID, &cdk.BatchID, &cdk.CodePrefix, &cdk.Status, &cdk.BoundUserID,
-			&cdk.ExpiresAt, &cdk.QuotaTotal, &cdk.QuotaUsed, &cdk.QuotaReserved, &cdk.QuotaRemaining,
+			&cdk.BoundUserState, &cdk.Remark, &cdk.BatchName, &cdk.ExpiresAt,
+			&cdk.QuotaTotal, &cdk.QuotaUsed, &cdk.QuotaReserved, &cdk.QuotaRemaining,
 			&cdk.ActivatedAt, &cdk.CreatedAt); err != nil {
 			return nil, err
 		}
 		cdks = append(cdks, cdk)
 	}
 	return cdks, rows.Err()
+}
+
+// GetCdkCiphertext loads the sealed CDK code for operator re-display.
+func GetCdkCiphertext(ctx context.Context, q Querier, cdkID uuid.UUID) ([]byte, error) {
+	var sealed []byte
+	err := q.QueryRow(ctx, `SELECT code_ciphertext FROM cdks WHERE id = $1`, cdkID).Scan(&sealed)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return sealed, nil
+}
+
+// System settings: simple string overrides applied at runtime.
+const SettingSolverBaseURL = "solver_base_url"
+
+// GetSystemSetting returns one stored override (value_json holds a plain
+// JSON string), or ErrNotFound.
+func GetSystemSetting(ctx context.Context, q Querier, key string) (string, error) {
+	var value string
+	err := q.QueryRow(ctx, `SELECT value_json #>> '{}' FROM system_settings WHERE setting_key = $1`, key).Scan(&value)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+// UpsertSystemSetting stores or replaces one override.
+func UpsertSystemSetting(ctx context.Context, q Querier, key, value string) error {
+	_, err := q.Exec(ctx, `
+		INSERT INTO system_settings (setting_key, value_json, updated_at)
+		VALUES ($1, to_jsonb($2::text), now())
+		ON CONFLICT (setting_key) DO UPDATE SET value_json = to_jsonb($2::text), updated_at = now()
+	`, key, value)
+	return err
 }
 
 // SetCdkStatus toggles DISABLED/ACTIVE while refusing terminal transitions.

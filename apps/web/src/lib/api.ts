@@ -52,6 +52,8 @@ export interface APIKey {
   prefix: string;
   last4: string;
   status: string;
+  quota_limit: number | null;
+  allowed_ips: string | null;
   total_calls: number;
   created_at: string;
   last_used_at: string | null;
@@ -127,11 +129,14 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  updateKey: (keyId: string, patch: { name?: string; status?: string }) =>
+  updateKey: (keyId: string, patch: { name?: string; status?: string; quota_limit?: number; allowed_ips?: string }) =>
     request<APIKey>(`/v1/keys/${keyId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+
+  revealKeySecret: (keyId: string) =>
+    request<{ secret: string }>(`/v1/keys/${keyId}/secret`),
 
   deleteKey: (keyId: string) =>
     request<APIKey>(`/v1/keys/${keyId}`, { method: 'DELETE' }),
@@ -177,14 +182,22 @@ export interface AdminBatch {
 export interface AdminCdk {
   id: string;
   batch_id: string;
+  batch_name: string;
   code_prefix: string;
   status: string;
   bound_user_id: string | null;
+  bound_user_state: string | null;
+  remark: string | null;
   quota_total: number;
   quota_used: number;
   quota_remaining: number;
   activated_at: string | null;
   created_at: string;
+}
+
+export interface SystemConfig {
+  solver_base_url: string;
+  solver_source: 'default' | 'override';
 }
 
 export interface AdminUser {
@@ -232,6 +245,29 @@ export const adminApi = {
     request<{ quota_remaining: number }>(`/admin/v1/cdks/${cdkId}/quota-adjustments`, {
       method: 'POST',
       body: JSON.stringify({ delta, reason }),
+    }),
+
+  revealCdkCode: (cdkId: string) =>
+    request<{ code: string }>(`/admin/v1/cdks/${cdkId}/code`),
+
+  setCdkRemark: (cdkId: string, remark: string) =>
+    request<{ remark: string }>(`/admin/v1/cdks/${cdkId}/remark`, {
+      method: 'PATCH',
+      body: JSON.stringify({ remark }),
+    }),
+
+  getSystemConfig: () => request<SystemConfig>('/admin/v1/system/config'),
+
+  setSystemConfig: (input: { solver_base_url: string; reason: string }) =>
+    request<{ solver_base_url: string }>('/admin/v1/system/config', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+
+  setCdkStatus: (cdkId: string, status: string, reason: string) =>
+    request<{ status: string }>(`/admin/v1/cdks/${cdkId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, reason }),
     }),
 
   listUsers: () => request<{ items: AdminUser[] }>('/admin/v1/users'),

@@ -56,6 +56,8 @@ type Cdk struct {
 	BatchID            uuid.UUID
 	CodePrefix         string
 	CodeHash           []byte
+	CodeCiphertext     []byte
+	Remark             *string
 	Status             CDKStatus
 	BoundUserID        *uuid.UUID
 	ActivationDeadline *time.Time
@@ -71,17 +73,20 @@ type Cdk struct {
 }
 
 type APIKey struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	Name       string
-	KeyPrefix  string
-	KeyLast4   string
-	KeyHash    []byte
-	Status     APIKeyStatus
-	TotalCalls int64
-	LastUsedAt *time.Time
-	CreatedAt  time.Time
-	RevokedAt  *time.Time
+	ID               uuid.UUID
+	UserID           uuid.UUID
+	Name             string
+	KeyPrefix        string
+	KeyLast4         string
+	KeyHash          []byte
+	SecretCiphertext []byte
+	Status           APIKeyStatus
+	QuotaLimit       *int64
+	AllowedIPs       *string
+	TotalCalls       int64
+	LastUsedAt       *time.Time
+	CreatedAt        time.Time
+	RevokedAt        *time.Time
 }
 
 type UserSession struct {

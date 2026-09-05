@@ -179,6 +179,9 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 	if err := store.CompleteAPICallSuccess(ctx, s.pool, callID, duration); err != nil {
 		slog.Error("complete success failed", "request_id", requestID, "error", err)
 	}
+	if err := store.IncrementAPIKeyUsage(ctx, s.pool, caller.APIKeyID); err != nil {
+		slog.Error("increment key usage failed", "request_id", requestID, "error", err)
+	}
 	if err := store.SaveIdempotencyResponse(ctx, s.pool, callID, caller.UserID, responseJSON); err != nil {
 		slog.Error("save idempotency response failed", "request_id", requestID, "error", err)
 	}

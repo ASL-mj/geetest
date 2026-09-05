@@ -96,7 +96,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(pool.Close)
 	// Tests assert on whole-table counts, so clear the mutable tables for
 	// isolation between tests and across suite runs.
-	if _, err := pool.Exec(ctx, `TRUNCATE quota_ledger, api_calls, cdks, cdk_batches, api_keys, users, user_sessions CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE quota_ledger, api_calls, cdks, cdk_batches, api_keys, users, user_sessions, system_settings CASCADE`); err != nil {
 		t.Fatalf("reset tables: %v", err)
 	}
 	services := service.NewServices(pool, testSettings)

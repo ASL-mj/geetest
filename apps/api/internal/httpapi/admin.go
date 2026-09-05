@@ -235,18 +235,21 @@ func (s *Server) handleAdminListCdks(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, len(cdks))
 	for _, cdk := range cdks {
 		items = append(items, map[string]any{
-			"id":              cdk.ID,
-			"batch_id":        cdk.BatchID,
-			"code_prefix":     cdk.CodePrefix,
-			"status":          cdk.Status,
-			"bound_user_id":   cdk.BoundUserID,
-			"expires_at":      formatTimePtr(cdk.ExpiresAt),
-			"quota_total":     cdk.QuotaTotal,
-			"quota_used":      cdk.QuotaUsed,
-			"quota_reserved":  cdk.QuotaReserved,
-			"quota_remaining": cdk.QuotaRemaining,
-			"activated_at":    formatTimePtr(cdk.ActivatedAt),
-			"created_at":      cdk.CreatedAt.UTC().Format(timeFormatUTC),
+			"id":               cdk.ID,
+			"batch_id":         cdk.BatchID,
+			"code_prefix":      cdk.CodePrefix,
+			"status":           cdk.Status,
+			"bound_user_id":    cdk.BoundUserID,
+			"bound_user_state": cdk.BoundUserState,
+			"remark":           cdk.Remark,
+			"batch_name":       cdk.BatchName,
+			"expires_at":       formatTimePtr(cdk.ExpiresAt),
+			"quota_total":      cdk.QuotaTotal,
+			"quota_used":       cdk.QuotaUsed,
+			"quota_reserved":   cdk.QuotaReserved,
+			"quota_remaining":  cdk.QuotaRemaining,
+			"activated_at":     formatTimePtr(cdk.ActivatedAt),
+			"created_at":       cdk.CreatedAt.UTC().Format(timeFormatUTC),
 		})
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"items": items})
@@ -312,6 +315,74 @@ func (s *Server) handleAdminSetCdkStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"status": status})
+}
+
+// handleAdminRevealCdkCode decrypts a CDK's sealed plaintext for re-copy.
+func (s *Server) handleAdminRevealCdkCode(w http.ResponseWriter, r *http.Request) {
+	cdkID := parseUUID(r.PathValue("cdk_id"))
+	if cdkID == nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return
+	}
+	code, appErr := s.services.RevealCdkCode(r.Context(), *cdkID)
+	if appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"code": code})
+}
+
+// handleAdminSetCdkRemark updates the operator note on one CDK.
+func (s *Server) handleAdminSetCdkRemark(w http.ResponseWriter, r *http.Request) {
+	cdkID := parseUUID(r.PathValue("cdk_id"))
+	if cdkID == nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return
+	}
+	var payload struct {
+		Remark string `json:"remark"`
+	}
+	if !decodeJSON(w, r, &payload) {
+		return
+	}
+	if appErr := s.services.SetCdkRemark(r.Context(), adminFromContext(r), *cdkID, strings.TrimSpace(payload.Remark)); appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"remark": strings.TrimSpace(payload.Remark)})
+}
+
+// handleAdminGetSystemConfig reports the effective runtime configuration.
+func (s *Server) handleAdminGetSystemConfig(w http.ResponseWriter, r *http.Request) {
+	view, appErr := s.services.GetSystemConfig(r.Context())
+	if appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{
+		"solver_base_url": view.SolverBaseURL,
+		"solver_source":   view.SolverSource,
+	})
+}
+
+// handleAdminSetSystemConfig stores, audits and live-applies an override.
+func (s *Server) handleAdminSetSystemConfig(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		SolverBaseURL string `json:"solver_base_url"`
+		Reason        string `json:"reason"`
+	}
+	if !decodeJSON(w, r, &payload) {
+		return
+	}
+	if !requireReason(w, payload.Reason) {
+		return
+	}
+	if appErr := s.services.SetSolverBaseURL(r.Context(), adminFromContext(r),
+		payload.SolverBaseURL, strings.TrimSpace(payload.Reason), s.solverGateway, s.auditIP(r)); appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"solver_base_url": strings.TrimSpace(payload.SolverBaseURL)})
 }
 
 // handleAdminListUsers lists platform users.

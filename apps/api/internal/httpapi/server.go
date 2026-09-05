@@ -21,8 +21,9 @@ var webFS embed.FS
 
 // Server carries the shared dependencies for all handlers.
 type Server struct {
-	services *service.Services
-	solve    *service.SolveService
+	services      *service.Services
+	solve         *service.SolveService
+	solverGateway service.SolverOverrideSetter
 }
 
 // NewRouter builds the V1 route table. Go 1.22+ ServeMux patterns provide
@@ -30,8 +31,13 @@ type Server struct {
 // service; passing nil omits it (useful for focused test routers).
 // When a web build is embedded (deploy images), unmatched GETs fall back to
 // the SPA so history routes like /console/keys survive a hard refresh.
-func NewRouter(services *service.Services, solve *service.SolveService) http.Handler {
+// The optional gateway override receiver lets the system-config endpoint
+// hot-apply a new solver base URL in the running process.
+func NewRouter(services *service.Services, solve *service.SolveService, overrides ...service.SolverOverrideSetter) http.Handler {
 	server := &Server{services: services, solve: solve}
+	for _, override := range overrides {
+		server.solverGateway = override
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", server.handleHealthz)
@@ -40,6 +46,7 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("POST /v1/keys", server.requireUserSession(server.handleCreateKey))
 	mux.HandleFunc("GET /v1/keys", server.requireUserSession(server.handleListKeys))
 	mux.HandleFunc("PATCH /v1/keys/{key_id}", server.requireUserSession(server.handleUpdateKey))
+	mux.HandleFunc("GET /v1/keys/{key_id}/secret", server.requireUserSession(server.handleRevealKeySecret))
 	mux.HandleFunc("DELETE /v1/keys/{key_id}", server.requireUserSession(server.handleDeleteKey))
 	mux.HandleFunc("GET /v1/account", server.requireUserSession(server.handleGetAccount))
 	mux.HandleFunc("GET /v1/usage", server.requireUserSession(server.handleGetUsage))
@@ -63,6 +70,10 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("PATCH /admin/v1/users/{user_id}", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetUserStatus))
 	mux.HandleFunc("GET /admin/v1/audit-logs", server.requireAdminAny(server.handleAdminListAuditLogs))
 	mux.HandleFunc("GET /admin/v1/solver-health", server.requireAdminAny(server.handleAdminSolverHealth))
+	mux.HandleFunc("GET /admin/v1/cdks/{cdk_id}/code", server.requireAdminAny(server.handleAdminRevealCdkCode))
+	mux.HandleFunc("PATCH /admin/v1/cdks/{cdk_id}/remark", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetCdkRemark))
+	mux.HandleFunc("GET /admin/v1/system/config", server.requireAdminAny(server.handleAdminGetSystemConfig))
+	mux.HandleFunc("PUT /admin/v1/system/config", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetSystemConfig))
 
 	// Embedded web console (production image). Serving is skipped entirely
 	// when apps/api/web is empty, so local/test routers behave as before.

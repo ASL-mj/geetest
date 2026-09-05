@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -39,12 +40,20 @@ func main() {
 	}
 	defer pool.Close()
 
-	limiter := ratelimit.New(ctx, settings)
-	gateway := solver.NewGateway(settings)
 	services := service.NewServices(pool, settings)
 	bootstrapAdmin(ctx, services)
+	limiter := ratelimit.New(ctx, settings)
+	gateway := solver.NewGateway(settings)
+	// Runtime overrides win over the environment default; apply the stored
+	// one before serving so a restart keeps the configured endpoint.
+	if override, err := store.GetSystemSetting(ctx, pool, store.SettingSolverBaseURL); err == nil && override != "" {
+		gateway.SetBaseURL(override)
+		slog.Info("solver base url override applied from system settings")
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.Error("read solver override failed", "error", err)
+	}
 	solveService := service.NewSolveService(pool, gateway, limiter, settings.SessionSecret)
-	handler := httpapi.NewRouter(services, solveService)
+	handler := httpapi.NewRouter(services, solveService, gateway)
 
 	server := &http.Server{
 		Addr:              ":8000",

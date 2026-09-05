@@ -1,29 +1,28 @@
 import {
   ArrowLeft,
   CheckCircle2,
-  CreditCard,
+  Copy,
   FileText,
   KeyRound,
   LayoutDashboard,
   Plus,
   RefreshCw,
   ServerCog,
+  Settings,
   ShieldAlert,
-  Users,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
-import { adminApi, ApiError, type AdminAuditEntry, type AdminBatch, type AdminCdk, type AdminDashboard, type AdminUser } from '../lib/api';
+import { adminApi, ApiError, type AdminAuditEntry, type AdminCdk, type AdminDashboard } from '../lib/api';
 import { adminPath, navigate, useRoute, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
 
 const adminNavigation: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: '数据概览', icon: LayoutDashboard },
-  { id: 'batches', label: 'CDK 批次', icon: CreditCard },
   { id: 'cdks', label: 'CDK 管理', icon: KeyRound },
-  { id: 'users', label: '用户管理', icon: Users },
   { id: 'audit', label: '管理员审计', icon: FileText },
   { id: 'health', label: '服务状态', icon: ServerCog },
+  { id: 'system', label: '系统配置', icon: Settings },
 ];
 
 function AdminStatus({ children, tone = 'success' }: { children: string; tone?: StatusTone }) {
@@ -37,6 +36,18 @@ function AdminError({ message, onRetry }: { message: string; onRetry: () => void
       <strong>加载失败</strong>
       <p>{message}</p>
       <button className="quiet-button" onClick={onRetry} type="button">重试</button>
+    </div>
+  );
+}
+
+// AdminDialog replaces window.prompt/alert flows with proper modals.
+function AdminDialog({ title, description, onClose, children }: { title: string; description?: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section aria-label={title} aria-modal="true" className="dialog" role="dialog">
+        <div className="dialog__header"><div><h2>{title}</h2>{description && <p>{description}</p>}</div><button className="icon-button" onClick={onClose} title="关闭" type="button">×</button></div>
+        {children}
+      </section>
     </div>
   );
 }
@@ -76,65 +87,174 @@ function OverviewSection() {
   );
 }
 
-function BatchesSection() {
-  const [batches, setBatches] = useState<AdminBatch[] | null>(null);
+// ---------- CDK management (creation + lifecycle in one view) ----------
+
+function CdksSection() {
+  const [cdks, setCdks] = useState<AdminCdk[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showSingle, setShowSingle] = useState(false);
+  const [showBatch, setShowBatch] = useState(false);
   const [generated, setGenerated] = useState<string[] | null>(null);
+  const [adjustTarget, setAdjustTarget] = useState<AdminCdk | null>(null);
+  const [statusTarget, setStatusTarget] = useState<AdminCdk | null>(null);
+  const [banTarget, setBanTarget] = useState<AdminCdk | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = () => {
     setError(null);
-    void adminApi.listBatches()
-      .then((envelope) => setBatches(envelope.data?.items ?? []))
+    void adminApi.listCdks()
+      .then((envelope) => setCdks(envelope.data?.items ?? []))
       .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
   };
   useEffect(() => { load(); }, []);
 
+  const revealCode = async (cdk: AdminCdk) => {
+    try {
+      const envelope = await adminApi.revealCdkCode(cdk.id);
+      const code = envelope.data?.code ?? '';
+      if (!code) throw new Error('empty');
+      setGenerated([code]);
+      navigator.clipboard?.writeText(code).catch(() => {});
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '无法获取兑换码明文。');
+    }
+  };
+
+  if (error) return <AdminError message={error} onRetry={load} />;
   return (
     <section className="admin-panel">
       <div className="admin-panel__heading">
-        <div><h2>CDK 批次</h2><p>明文兑换码只在生成响应中出现一次。</p></div>
-        <button className="public-primary" onClick={() => setShowCreate(true)} type="button"><Plus aria-hidden="true" size={16} />新建批次</button>
-      </div>
-      {error && <AdminError message={error} onRetry={load} />}
-      {batches === null && !error && <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>}
-      {batches !== null && (
-        <div className="admin-table-wrap">
-          <table>
-            <thead><tr><th>批次名称</th><th>默认额度</th><th>CDK 总数</th><th>激活数</th><th>创建时间</th></tr></thead>
-            <tbody>
-              {batches.map((batch) => (
-                <tr key={batch.id}>
-                  <td><strong className="admin-mono">{batch.name}</strong></td>
-                  <td className="admin-mono">{formatCount(batch.default_quota)}</td>
-                  <td className="admin-mono">{formatCount(batch.total_cdks)}</td>
-                  <td className="admin-mono">{formatCount(batch.active_cdks)}</td>
-                  <td>{formatTime(batch.created_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div><h2>CDK 管理</h2><p>创建、调整、禁用一条完成；明文兑换码可随时再次复制。</p></div>
+        <div className="admin-panel__actions">
+          <button className="quiet-button" onClick={() => setShowSingle(true)} type="button"><Plus aria-hidden="true" size={15} />单条创建</button>
+          <button className="public-primary" onClick={() => setShowBatch(true)} type="button"><Plus aria-hidden="true" size={16} />批量创建</button>
         </div>
+      </div>
+      {notice && <div className="admin-inline-error" role="alert"><ShieldAlert aria-hidden="true" size={15} />{notice}<button onClick={() => setNotice(null)} type="button">知道了</button></div>}
+      {cdks === null
+        ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+        : (
+          <div className="admin-table-wrap">
+            <table>
+              <thead><tr><th>前缀</th><th>状态</th><th>备注</th><th>绑定用户</th><th>额度</th><th>剩余</th><th>激活时间</th><th aria-label="操作" /></tr></thead>
+              <tbody>
+                {cdks.map((cdk) => {
+                  const meta = cdkStatusMeta(cdk.status);
+                  const banned = cdk.bound_user_state === 'SUSPENDED';
+                  return (
+                    <tr key={cdk.id}>
+                      <td><span className="admin-mono">{cdk.code_prefix}</span></td>
+                      <td><AdminStatus tone={meta.tone}>{meta.label}</AdminStatus></td>
+                      <td><span className="admin-remark" title={cdk.remark ?? ''}>{cdk.remark || '—'}</span></td>
+                      <td>
+                        {cdk.bound_user_id
+                          ? <span className="admin-mono">{cdk.bound_user_id.slice(0, 8)} <AdminStatus tone={banned ? 'danger' : 'success'}>{banned ? '已封禁' : '正常'}</AdminStatus></span>
+                          : '—'}
+                      </td>
+                      <td className="admin-mono">{formatCount(cdk.quota_total)}</td>
+                      <td className="admin-mono">{formatCount(cdk.quota_remaining)}</td>
+                      <td>{formatTime(cdk.activated_at)}</td>
+                      <td className="admin-actions">
+                        <button className="icon-button" onClick={() => void revealCode(cdk)} title="复制兑换码" type="button"><Copy aria-hidden="true" size={15} /></button>
+                        <button className="admin-action" onClick={() => setAdjustTarget(cdk)} type="button">调整</button>
+                        <button className="admin-action" onClick={() => setStatusTarget(cdk)} type="button">{cdk.status === 'DISABLED' ? '启用' : '禁用'}</button>
+                        {cdk.bound_user_id && (
+                          <button className="admin-action admin-action--danger" onClick={() => setBanTarget(cdk)} type="button">{banned ? '恢复' : '封禁'}</button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      {showSingle && (
+        <SingleCdkDialog
+          onClose={() => setShowSingle(false)}
+          onCreated={(codes) => { setGenerated(codes); setShowSingle(false); load(); }}
+        />
       )}
-      {showCreate && (
+      {showBatch && (
         <BatchDialog
-          onClose={() => setShowCreate(false)}
-          onCreated={(codes) => { setGenerated(codes); setShowCreate(false); load(); }}
+          onClose={() => setShowBatch(false)}
+          onCreated={(codes) => { setGenerated(codes); setShowBatch(false); load(); }}
+        />
+      )}
+      {adjustTarget && (
+        <AdjustQuotaDialog cdk={adjustTarget} onClose={() => setAdjustTarget(null)} onDone={() => { setAdjustTarget(null); load(); }} />
+      )}
+      {statusTarget && (
+        <ReasonDialog
+          title={statusTarget.status === 'DISABLED' ? '启用 CDK' : '禁用 CDK'}
+          description={`${statusTarget.code_prefix}… 启用后可重新激活与调用。`}
+          confirmLabel={statusTarget.status === 'DISABLED' ? '启用' : '禁用'}
+          onClose={() => setStatusTarget(null)}
+          onSubmit={async (reason) => {
+            await adminApi.setCdkStatus(statusTarget.id, statusTarget.status === 'DISABLED' ? 'ACTIVE' : 'DISABLED', reason);
+          }}
+          onDone={() => { setStatusTarget(null); load(); }}
+        />
+      )}
+      {banTarget && banTarget.bound_user_id && (
+        <ReasonDialog
+          title={banTarget.bound_user_state === 'SUSPENDED' ? '恢复用户' : '封禁用户'}
+          description={`绑定用户 ${banTarget.bound_user_id.slice(0, 8)}… 封禁会立即撤销其全部会话。`}
+          confirmLabel={banTarget.bound_user_state === 'SUSPENDED' ? '恢复' : '封禁'}
+          onClose={() => setBanTarget(null)}
+          onSubmit={async (reason) => {
+            await adminApi.setUserStatus(banTarget.bound_user_id!, banTarget.bound_user_state === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED', reason);
+          }}
+          onDone={() => { setBanTarget(null); load(); }}
         />
       )}
       {generated && (
-        <div className="dialog-backdrop" role="presentation">
-          <section aria-labelledby="codes-title" aria-modal="true" className="dialog" role="dialog">
-            <div className="dialog__header"><div><h2 id="codes-title">兑换码已生成</h2><p>关闭后无法再次查看，请立即导出。</p></div></div>
-            <div className="secret-field"><code>{generated.join('\n')}</code></div>
-            <div className="dialog__actions">
-              <button className="quiet-button" onClick={() => void navigator.clipboard?.writeText(generated.join('\n'))} type="button">复制全部</button>
-              <button className="primary-button" onClick={() => setGenerated(null)} type="button">我已导出</button>
-            </div>
-          </section>
-        </div>
+        <AdminDialog description="已复制到剪贴板；也可以在列表中随时再次复制。" onClose={() => setGenerated(null)} title="兑换码明文">
+          <div className="secret-field"><code>{generated.join('\n')}</code></div>
+          <div className="dialog__actions">
+            <button className="quiet-button" onClick={() => void navigator.clipboard?.writeText(generated.join('\n'))} type="button">复制全部</button>
+            <button className="primary-button" onClick={() => setGenerated(null)} type="button">完成</button>
+          </div>
+        </AdminDialog>
       )}
     </section>
+  );
+}
+
+function SingleCdkDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (codes: string[]) => void }) {
+  const [remark, setRemark] = useState('');
+  const [quota, setQuota] = useState(100);
+  const [duration, setDuration] = useState(365);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const envelope = await adminApi.createBatch({ name: remark.trim() || '单条创建', quota, count: 1, service_duration_days: duration, reason: remark.trim() || '单条创建' });
+      onCreated(envelope.data?.codes ?? []);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '生成失败。');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AdminDialog description="生成后可在列表中随时复制明文。" onClose={onClose} title="单条创建 CDK">
+      <label htmlFor="single-remark">备注</label>
+      <input id="single-remark" onChange={(event) => setRemark(event.target.value)} placeholder="例如：渠道 A 客户张三" value={remark} />
+      <label htmlFor="single-quota">额度次数</label>
+      <input id="single-quota" min={1} onChange={(event) => setQuota(Number(event.target.value))} type="number" value={quota} />
+      <label htmlFor="single-duration">服务时长（天）</label>
+      <input id="single-duration" min={1} onChange={(event) => setDuration(Number(event.target.value))} type="number" value={duration} />
+      {error && <p className="field-hint" role="alert">{error}</p>}
+      <div className="dialog__actions">
+        <button className="quiet-button" onClick={onClose} type="button">取消</button>
+        <button className="primary-button" disabled={submitting} onClick={() => void create()} type="button">{submitting ? '生成中…' : '生成 CDK'}</button>
+      </div>
+    </AdminDialog>
   );
 }
 
@@ -161,143 +281,99 @@ function BatchDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (
   };
 
   return (
-    <div className="dialog-backdrop" role="presentation">
-      <section aria-labelledby="batch-title" aria-modal="true" className="dialog" role="dialog">
-        <div className="dialog__header"><div><h2 id="batch-title">新建 CDK 批次</h2><p>生成后明文只展示一次。</p></div><button className="icon-button" onClick={onClose} type="button">×</button></div>
-        <label htmlFor="batch-name">批次名称</label>
-        <input id="batch-name" onChange={(event) => setName(event.target.value)} value={name} />
-        <label htmlFor="batch-quota">每枚额度</label>
-        <input id="batch-quota" min={1} onChange={(event) => setQuota(Number(event.target.value))} type="number" value={quota} />
-        <label htmlFor="batch-count">生成数量（1-500）</label>
-        <input id="batch-count" max={500} min={1} onChange={(event) => setCount(Number(event.target.value))} type="number" value={count} />
-        <label htmlFor="batch-duration">服务时长（天）</label>
-        <input id="batch-duration" min={1} onChange={(event) => setDuration(Number(event.target.value))} type="number" value={duration} />
-        <label htmlFor="batch-reason">操作原因</label>
-        <input id="batch-reason" onChange={(event) => setReason(event.target.value)} placeholder="例如：渠道商订单 42" value={reason} />
-        {error && <p className="field-hint" role="alert">{error}</p>}
-        <div className="dialog__actions">
-          <button className="quiet-button" onClick={onClose} type="button">取消</button>
-          <button className="primary-button" disabled={!name.trim() || !reason.trim() || submitting} onClick={() => void create()} type="button">{submitting ? '生成中…' : '生成批次'}</button>
-        </div>
-      </section>
-    </div>
+    <AdminDialog description="生成后明文在列表中可随时复制。" onClose={onClose} title="批量创建 CDK">
+      <label htmlFor="batch-name">批次名称</label>
+      <input id="batch-name" onChange={(event) => setName(event.target.value)} value={name} />
+      <label htmlFor="batch-quota">每枚额度</label>
+      <input id="batch-quota" min={1} onChange={(event) => setQuota(Number(event.target.value))} type="number" value={quota} />
+      <label htmlFor="batch-count">生成数量（1-500）</label>
+      <input id="batch-count" max={500} min={1} onChange={(event) => setCount(Number(event.target.value))} type="number" value={count} />
+      <label htmlFor="batch-duration">服务时长（天）</label>
+      <input id="batch-duration" min={1} onChange={(event) => setDuration(Number(event.target.value))} type="number" value={duration} />
+      <label htmlFor="batch-reason">操作原因</label>
+      <input id="batch-reason" onChange={(event) => setReason(event.target.value)} placeholder="例如：渠道商订单 42" value={reason} />
+      {error && <p className="field-hint" role="alert">{error}</p>}
+      <div className="dialog__actions">
+        <button className="quiet-button" onClick={onClose} type="button">取消</button>
+        <button className="primary-button" disabled={!name.trim() || !reason.trim() || submitting} onClick={() => void create()} type="button">{submitting ? '生成中…' : '生成批次'}</button>
+      </div>
+    </AdminDialog>
   );
 }
 
-function CdksSection() {
-  const [cdks, setCdks] = useState<AdminCdk[] | null>(null);
+function AdjustQuotaDialog({ cdk, onClose, onDone }: { cdk: AdminCdk; onClose: () => void; onDone: () => void }) {
+  const [delta, setDelta] = useState('');
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
+  const submit = async () => {
+    setSubmitting(true);
     setError(null);
-    void adminApi.listCdks()
-      .then((envelope) => setCdks(envelope.data?.items ?? []))
-      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
-  };
-  useEffect(() => { load(); }, []);
-
-  const adjust = async (cdk: AdminCdk) => {
-    const input = window.prompt(`为 ${cdk.code_prefix} 调整额度，输入增量（正数补充，负数扣减）：`);
-    if (!input) return;
-    const reason = window.prompt('操作原因：');
-    if (!reason) return;
     try {
-      await adminApi.adjustQuota(cdk.id, Number(input), reason);
-      load();
+      await adminApi.adjustQuota(cdk.id, Number(delta), reason.trim());
+      onDone();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : '调整失败。');
+      setError(err instanceof ApiError ? err.message : '调整失败。');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  if (error) return <AdminError message={error} onRetry={load} />;
   return (
-    <section className="admin-panel">
-      <div className="admin-panel__heading"><div><h2>CDK 管理</h2><p>点击「调整」写入配额流水并生成审计记录。</p></div></div>
-      {cdks === null
-        ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
-        : (
-          <div className="admin-table-wrap">
-            <table>
-              <thead><tr><th>前缀</th><th>状态</th><th>绑定用户</th><th>额度</th><th>剩余</th><th>激活时间</th><th aria-label="操作" /></tr></thead>
-              <tbody>
-                {cdks.map((cdk) => {
-                  const meta = cdkStatusMeta(cdk.status);
-                  return (
-                    <tr key={cdk.id}>
-                      <td><span className="admin-mono">{cdk.code_prefix}</span></td>
-                      <td><AdminStatus tone={meta.tone}>{meta.label}</AdminStatus></td>
-                      <td><span className="admin-mono">{cdk.bound_user_id ? cdk.bound_user_id.slice(0, 8) : '—'}</span></td>
-                      <td className="admin-mono">{formatCount(cdk.quota_total)}</td>
-                      <td className="admin-mono">{formatCount(cdk.quota_remaining)}</td>
-                      <td>{formatTime(cdk.activated_at)}</td>
-                      <td><button className="icon-button" onClick={() => void adjust(cdk)} title="调整额度" type="button"><Plus aria-hidden="true" size={16} /></button></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-    </section>
+    <AdminDialog description={`${cdk.code_prefix}… 当前剩余 ${formatCount(cdk.quota_remaining)} 次`} onClose={onClose} title="调整额度">
+      <label htmlFor="adjust-delta">变动额度（正数补充，负数扣减）</label>
+      <input id="adjust-delta" onChange={(event) => setDelta(event.target.value)} placeholder="例如：100 或 -50" type="number" value={delta} />
+      <label htmlFor="adjust-reason">操作原因</label>
+      <input id="adjust-reason" onChange={(event) => setReason(event.target.value)} placeholder="例如：支持工单 42" value={reason} />
+      {error && <p className="field-hint" role="alert">{error}</p>}
+      <div className="dialog__actions">
+        <button className="quiet-button" onClick={onClose} type="button">取消</button>
+        <button className="primary-button" disabled={!delta || Number(delta) === 0 || !reason.trim() || submitting} onClick={() => void submit()} type="button">{submitting ? '提交中…' : '提交调整'}</button>
+      </div>
+    </AdminDialog>
   );
 }
 
-function UsersSection() {
-  const [users, setUsers] = useState<AdminUser[] | null>(null);
+function ReasonDialog({ title, description, confirmLabel, onClose, onSubmit, onDone }: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  onClose: () => void;
+  onSubmit: (reason: string) => Promise<void>;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
+  const submit = async () => {
+    setSubmitting(true);
     setError(null);
-    void adminApi.listUsers()
-      .then((envelope) => setUsers(envelope.data?.items ?? []))
-      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
-  };
-  useEffect(() => { load(); }, []);
-
-  const setStatus = async (user: AdminUser) => {
-    const next = user.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    const reason = window.prompt(next === 'SUSPENDED' ? '封禁原因：' : '恢复原因：');
-    if (!reason) return;
     try {
-      await adminApi.setUserStatus(user.id, next, reason);
-      load();
+      await onSubmit(reason.trim());
+      onDone();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : '操作失败。');
+      setError(err instanceof ApiError ? err.message : '操作失败。');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  if (error) return <AdminError message={error} onRetry={load} />;
   return (
-    <section className="admin-panel">
-      <div className="admin-panel__heading"><div><h2>用户管理</h2><p>封禁立即撤销该用户全部会话。</p></div></div>
-      {users === null
-        ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
-        : (
-          <div className="admin-table-wrap">
-            <table>
-              <thead><tr><th>用户 ID</th><th>CDK 前缀</th><th>状态</th><th>剩余额度</th><th>创建时间</th><th aria-label="操作" /></tr></thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td><span className="admin-mono">{user.id.slice(0, 8)}</span></td>
-                    <td><span className="admin-mono">{user.cdk_prefix ?? '—'}</span></td>
-                    <td><AdminStatus tone={user.status === 'ACTIVE' ? 'success' : 'danger'}>{user.status === 'ACTIVE' ? '正常' : '已封禁'}</AdminStatus></td>
-                    <td className="admin-mono">{user.cdk_remaining != null ? formatCount(user.cdk_remaining) : '—'}</td>
-                    <td>{formatTime(user.created_at)}</td>
-                    <td>
-                      <button className="icon-button" onClick={() => void setStatus(user)} title={user.status === 'ACTIVE' ? '封禁' : '恢复'} type="button">
-                        {user.status === 'ACTIVE' ? '封禁' : '恢复'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-    </section>
+    <AdminDialog description={description} onClose={onClose} title={title}>
+      <label htmlFor="reason-input">操作原因</label>
+      <input autoFocus id="reason-input" onChange={(event) => setReason(event.target.value)} placeholder="将写入审计日志" value={reason} />
+      {error && <p className="field-hint" role="alert">{error}</p>}
+      <div className="dialog__actions">
+        <button className="quiet-button" onClick={onClose} type="button">取消</button>
+        <button className="primary-button" disabled={!reason.trim() || submitting} onClick={() => void submit()} type="button">{submitting ? '提交中…' : confirmLabel}</button>
+      </div>
+    </AdminDialog>
   );
 }
+
+// ---------- audit / health / system ----------
 
 function AuditSection() {
   const [entries, setEntries] = useState<AdminAuditEntry[] | null>(null);
@@ -369,6 +445,66 @@ function HealthSection() {
   );
 }
 
+function SystemSection() {
+  const [config, setConfig] = useState<{ solver_base_url: string; solver_source: string } | null>(null);
+  const [baseURL, setBaseURL] = useState('');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const load = () => {
+    void adminApi.getSystemConfig()
+      .then((envelope) => {
+        const data = envelope.data ?? { solver_base_url: '', solver_source: 'default' };
+        setConfig(data);
+        setBaseURL(data.solver_base_url);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await adminApi.setSystemConfig({ solver_base_url: baseURL.trim(), reason: reason.trim() });
+      setSaved(true);
+      setReason('');
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '保存失败。');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (error && !config) return <AdminError message={error} onRetry={load} />;
+  return (
+    <section className="admin-panel">
+      <div className="admin-panel__heading"><div><h2>系统配置</h2><p>修改后立即生效并写入审计，无需重启服务。</p></div></div>
+      <div className="system-config-form">
+        <label htmlFor="solver-url">底层解析服务地址（Base URL）</label>
+        <input id="solver-url" onChange={(event) => setBaseURL(event.target.value)} placeholder="https://solver.internal.example.com" value={baseURL} />
+        <p className="field-hint">
+          当前来源：{config?.solver_source === 'override'
+            ? <AdminStatus tone="warning">运行时配置</AdminStatus>
+            : <AdminStatus tone="success">环境变量默认值</AdminStatus>}
+          。切换地址后新的解析请求立即使用新端点。
+        </p>
+        <label htmlFor="solver-reason">操作原因</label>
+        <input id="solver-reason" onChange={(event) => setReason(event.target.value)} placeholder="将写入审计日志" value={reason} />
+        {error && <p className="field-hint" role="alert">{error}</p>}
+        {saved && <p className="field-hint system-saved"><CheckCircle2 aria-hidden="true" size={14} />已保存并即时生效。</p>}
+        <div className="dialog__actions">
+          <button className="primary-button" disabled={!baseURL.trim() || !reason.trim() || saving || baseURL === config?.solver_base_url} onClick={() => void save()} type="button">{saving ? '保存中…' : '保存配置'}</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AdminLoginGate({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -409,7 +545,7 @@ function AdminLoginGate({ onAuthenticated }: { onAuthenticated: () => void }) {
 }
 
 export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSection; onExit: () => void }) {
-  // Section lives in the URL (/admin/overview, /admin/users, …) so refresh
+  // Section lives in the URL (/admin/overview, /admin/cdks, …) so refresh
   // and deep links land on the same management view.
   const route = useRoute();
   const section: AdminSection = route.name === 'admin' ? route.section : (initialSection ?? 'overview');
@@ -453,14 +589,13 @@ export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSe
         <header className="admin-topbar"><div><span>管理员后台</span><b> / {current.label}</b></div><div><AdminStatus>已登录</AdminStatus><span className="admin-avatar">AD</span></div></header>
         <div className="admin-content">
           <div className="admin-title">
-            <div><p className="public-eyebrow">OPERATIONS CONSOLE</p><h1>{current.label}</h1><p>统一管理 CDK、用户、Key、调用和平台运行状态。</p></div>
+            <div><p className="public-eyebrow">OPERATIONS CONSOLE</p><h1>{current.label}</h1><p>统一管理 CDK、用户、调用审计与平台运行配置。</p></div>
           </div>
           {section === 'overview' && <OverviewSection />}
-          {section === 'batches' && <BatchesSection />}
           {section === 'cdks' && <CdksSection />}
-          {section === 'users' && <UsersSection />}
           {section === 'audit' && <AuditSection />}
           {section === 'health' && <HealthSection />}
+          {section === 'system' && <SystemSection />}
         </div>
       </main>
     </div>

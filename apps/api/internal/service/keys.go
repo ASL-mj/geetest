@@ -19,8 +19,9 @@ type CreatedAPIKey struct {
 	Secret string
 }
 
-// CreateAPIKey generates a cf_live_ secret, persists only its peppered HMAC
-// hash plus display prefix/last4, and returns the plaintext exactly once.
+// CreateAPIKey generates a cf_live_ secret, persists its peppered HMAC hash
+// for authentication plus an AES-GCM ciphertext so the owner can re-copy the
+// plaintext from the console.
 func (s *Services) CreateAPIKey(ctx context.Context, userID uuid.UUID, name string) (CreatedAPIKey, *ApplicationError) {
 	var created CreatedAPIKey
 	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
@@ -55,19 +56,81 @@ func (s *Services) createAPIKeySecret(ctx context.Context, q store.Querier, user
 		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	full := "cf_live_" + secret
+	sealed, err := crypto.Seal(s.Settings.SessionSecret, full)
+	if err != nil {
+		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
 	record := domain.APIKey{
-		ID:        uuid.New(),
-		UserID:    userID,
-		Name:      name,
-		KeyPrefix: full[:16],
-		KeyLast4:  full[len(full)-4:],
-		KeyHash:   crypto.HMACSHA256(full, s.Settings.APIKeyPepper),
-		Status:    domain.APIKeyStatusActive,
+		ID:               uuid.New(),
+		UserID:           userID,
+		Name:             name,
+		KeyPrefix:        full[:16],
+		KeyLast4:         full[len(full)-4:],
+		KeyHash:          crypto.HMACSHA256(full, s.Settings.APIKeyPepper),
+		SecretCiphertext: sealed,
+		Status:           domain.APIKeyStatusActive,
 	}
 	if err := store.CreateAPIKey(ctx, q, record); err != nil {
 		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	return full, nil
+}
+
+// RevealAPIKeySecret decrypts the stored ciphertext for the owning user so
+// the console can copy an existing key again.
+func (s *Services) RevealAPIKeySecret(ctx context.Context, userID, keyID uuid.UUID) (string, *ApplicationError) {
+	key, err := store.GetAPIKeyForUser(ctx, s.Pool, userID, keyID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", ErrAPIKeyNotFound()
+		}
+		slog.Error("reveal api key lookup failed", "error", err)
+		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	secret, err := crypto.Open(s.Settings.SessionSecret, key.SecretCiphertext)
+	if err != nil {
+		return "", NewError(422, "KEY_SECRET_UNAVAILABLE", "该 Key 缺少可恢复的密文，无法再次显示。")
+	}
+	return secret, nil
+}
+
+// UpdateAPIKeyPolicy edits the display name, per-key quota ceiling and IP
+// allowlist. An empty allowlist string clears the restriction.
+func (s *Services) UpdateAPIKeyPolicy(ctx context.Context, userID, keyID uuid.UUID, name *string, quotaLimit *int64, allowedIPs *string) (domain.APIKey, *ApplicationError) {
+	var normalizedIPs *string
+	if allowedIPs != nil {
+		cleaned, err := crypto.NormalizeIPAllowlist(*allowedIPs)
+		if err != nil {
+			return domain.APIKey{}, NewError(422, "INVALID_REQUEST", err.Error())
+		}
+		normalizedIPs = &cleaned
+	}
+	var updated domain.APIKey
+	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
+		key, err := store.GetAPIKeyForUser(ctx, q, userID, keyID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrAPIKeyNotFound()
+			}
+			return err
+		}
+		if key.Status == domain.APIKeyStatusDeleted {
+			return ErrAPIKeyDeleted()
+		}
+		if err := store.UpdateAPIKeyPolicy(ctx, q, keyID, name, quotaLimit, normalizedIPs); err != nil {
+			return err
+		}
+		updated, err = store.GetAPIKeyForUser(ctx, q, userID, keyID)
+		return err
+	})
+	if err != nil {
+		if appErr := asApplicationError(err); appErr != nil {
+			return domain.APIKey{}, appErr
+		}
+		slog.Error("update api key policy failed", "error", err)
+		return domain.APIKey{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	return updated, nil
 }
 
 // ListAPIKeys returns the caller's keys without secrets.
@@ -243,6 +306,9 @@ func validateEffectiveCaller(key domain.APIKey, user domain.User, cdk domain.Cdk
 	}
 	if cdk.QuotaRemaining <= 0 {
 		return ErrQuotaExhausted()
+	}
+	if key.QuotaLimit != nil && *key.QuotaLimit > 0 && key.TotalCalls >= *key.QuotaLimit {
+		return ErrKeyQuotaExhausted()
 	}
 	return nil
 }

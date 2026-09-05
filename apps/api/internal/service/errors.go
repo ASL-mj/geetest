@@ -85,6 +85,14 @@ func ErrAdminForbidden() *ApplicationError {
 func ErrUserNotFound() *ApplicationError {
 	return NewError(404, "USER_NOT_FOUND", "User was not found.")
 }
+func ErrKeyQuotaExhausted() *ApplicationError {
+	return NewError(402, "KEY_QUOTA_EXHAUSTED", "该 API Key 的额度上限已用完，请调整限额或更换 Key。")
+}
+
+func ErrKeyIPForbidden() *ApplicationError {
+	return NewError(403, "KEY_IP_FORBIDDEN", "调用来源 IP 不在该 Key 的白名单内。")
+}
+
 func ErrNotFound() *ApplicationError {
 	return NewError(404, "NOT_FOUND", "Resource was not found.")
 }

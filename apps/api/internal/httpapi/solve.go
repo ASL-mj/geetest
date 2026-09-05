@@ -82,6 +82,14 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP, clientIPHash := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	if caller.APIKey.AllowedIPs != nil && *caller.APIKey.AllowedIPs != "" {
+		if rawIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			if !crypto.IPAllowed(rawIP, *caller.APIKey.AllowedIPs) {
+				writeApplicationError(w, service.ErrKeyIPForbidden())
+				return
+			}
+		}
+	}
 	outcome := s.solve.Solve(r.Context(), service.SolveInput{
 		Caller:         caller,
 		CaptchaID:      captchaID,
@@ -146,6 +154,14 @@ func (s *Server) handleConsoleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP, clientIPHash := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	if caller.APIKey.AllowedIPs != nil && *caller.APIKey.AllowedIPs != "" {
+		if rawIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			if !crypto.IPAllowed(rawIP, *caller.APIKey.AllowedIPs) {
+				writeApplicationError(w, service.ErrKeyIPForbidden())
+				return
+			}
+		}
+	}
 	outcome := s.solve.Solve(r.Context(), service.SolveInput{
 		Caller:         caller,
 		CaptchaID:      captchaID,

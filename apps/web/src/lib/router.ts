@@ -20,14 +20,13 @@ export type ConsolePage =
 
 export type AdminSection =
   | 'overview'
-  | 'batches'
   | 'cdks'
-  | 'users'
   | 'audit'
-  | 'health';
+  | 'health'
+  | 'system';
 
 const consolePages: ConsolePage[] = ['dashboard', 'keys', 'debug', 'usage', 'calls', 'docs', 'account'];
-const adminSectionList: AdminSection[] = ['overview', 'batches', 'cdks', 'users', 'audit', 'health'];
+const adminSectionList: AdminSection[] = ['overview', 'cdks', 'audit', 'health', 'system'];
 
 export function consolePath(page: ConsolePage): string {
   return `/console/${page}`;

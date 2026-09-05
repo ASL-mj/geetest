@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/captchaflow/service-platform/api/internal/config"
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
@@ -120,7 +123,7 @@ type CreateCdkBatchRequest struct {
 }
 
 // CreateCdkBatchResult returns the batch and the plaintext codes; they are
-// never persisted and cannot be recovered later.
+// also sealed for later operator re-display in CDK management.
 type CreateCdkBatchResult struct {
 	BatchID uuid.UUID
 	Codes   []string
@@ -146,6 +149,12 @@ func (s *Services) CreateCdkBatch(ctx context.Context, admin AdminSession, reque
 			request.Quota, request.ActivationDeadline, request.ServiceDurationDays, admin.ID); err != nil {
 			return err
 		}
+		// Default the remark to the batch description/name so every code is
+		// identifiable in CDK management; single creations pass their own.
+		remark := request.Description
+		if remark == "" {
+			remark = request.Name
+		}
 		codes := make([]string, 0, request.Count)
 		for i := 0; i < request.Count; i++ {
 			code, err := crypto.GenerateCDKCode("CAPTCHA")
@@ -153,9 +162,18 @@ func (s *Services) CreateCdkBatch(ctx context.Context, admin AdminSession, reque
 				return err
 			}
 			normalized := crypto.NormalizeCDK(code)
+			sealed, err := crypto.Seal(s.Settings.SessionSecret, code)
+			if err != nil {
+				return err
+			}
+			var remarkPtr *string
+			if remark != "" {
+				remarkCopy := remark
+				remarkPtr = &remarkCopy
+			}
 			if err := store.CreateCdk(ctx, q, batchID, normalized[:8],
-				crypto.HMACSHA256(normalized, s.Settings.CDKPepper),
-				request.Quota, request.ActivationDeadline); err != nil {
+				crypto.HMACSHA256(normalized, s.Settings.CDKPepper), sealed,
+				request.Quota, request.ActivationDeadline, remarkPtr); err != nil {
 				return err
 			}
 			codes = append(codes, code)
@@ -173,6 +191,104 @@ func (s *Services) CreateCdkBatch(ctx context.Context, admin AdminSession, reque
 		return CreateCdkBatchResult{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	return result, nil
+}
+
+// RevealCdkCode decrypts a CDK's sealed plaintext for operators.
+func (s *Services) RevealCdkCode(ctx context.Context, cdkID uuid.UUID) (string, *ApplicationError) {
+	sealed, err := store.GetCdkCiphertext(ctx, s.Pool, cdkID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", ErrCDKNotFound()
+		}
+		slog.Error("reveal cdk lookup failed", "error", err)
+		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	code, err := crypto.Open(s.Settings.SessionSecret, sealed)
+	if err != nil {
+		return "", NewError(422, "CDK_CODE_UNAVAILABLE", "该 CDK 缺少可恢复的密文，无法再次显示。")
+	}
+	return code, nil
+}
+
+// SetCdkRemark rewrites the operator note shown in CDK management.
+func (s *Services) SetCdkRemark(ctx context.Context, admin AdminSession, cdkID uuid.UUID, remark string) *ApplicationError {
+	if admin.Role != store.AdminRoleAdmin {
+		return ErrAdminForbidden()
+	}
+	if len(remark) > 200 {
+		return ErrInvalidRequest()
+	}
+	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
+		if err := store.UpdateCdkRemark(ctx, q, cdkID, remark); err != nil {
+			return err
+		}
+		return recordAudit(ctx, q, admin, "cdk.remark_updated", "cdk", cdkID, nil,
+			map[string]any{"remark": remark}, "更新备注", "")
+	})
+	if err != nil {
+		slog.Error("update cdk remark failed", "error", err)
+		return NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	return nil
+}
+
+// SystemConfigView is the operator-facing runtime configuration snapshot.
+type SystemConfigView struct {
+	SolverBaseURL string
+	SolverSource  string
+}
+
+// GetSystemConfig reports the effective solver base URL and where it comes
+// from (runtime override or environment default).
+func (s *Services) GetSystemConfig(ctx context.Context) (SystemConfigView, *ApplicationError) {
+	override, err := store.GetSystemSetting(ctx, s.Pool, store.SettingSolverBaseURL)
+	if err == nil {
+		return SystemConfigView{SolverBaseURL: override, SolverSource: "override"}, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		slog.Error("read system config failed", "error", err)
+		return SystemConfigView{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	return SystemConfigView{SolverBaseURL: s.Settings.GeetestSolverURL, SolverSource: "default"}, nil
+}
+
+// SolverOverrideSetter lets the transport apply a new solver URL to the
+// running gateway without a restart.
+type SolverOverrideSetter interface {
+	SetBaseURL(url string)
+}
+
+// SetSolverBaseURL stores, audits and live-applies the solver base URL.
+func (s *Services) SetSolverBaseURL(ctx context.Context, admin AdminSession, baseURL, reason string, gateway SolverOverrideSetter, ipMasked string) *ApplicationError {
+	if admin.Role != store.AdminRoleAdmin {
+		return ErrAdminForbidden()
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+		return NewError(422, "INVALID_REQUEST", "解析服务地址必须是 http(s) URL。")
+	}
+	if s.Settings.Environment == config.EnvProduction && (parsed.Host == "localhost" || strings.HasPrefix(parsed.Host, "127.")) {
+		return NewError(422, "INVALID_REQUEST", "生产环境不允许将解析服务指向本机地址。")
+	}
+	if reason == "" {
+		return ErrInvalidRequest()
+	}
+	err = store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
+		if err := store.UpsertSystemSetting(ctx, q, store.SettingSolverBaseURL, baseURL); err != nil {
+			return err
+		}
+		return recordAudit(ctx, q, admin, "system.solver_base_url_changed", "system", uuid.Nil,
+			nil, map[string]any{"solver_base_url": baseURL}, reason, ipMasked)
+	})
+	if err != nil {
+		slog.Error("save solver base url failed", "error", err)
+		return NewError(500, "INTERNAL_ERROR", "Internal server error.")
+	}
+	if gateway != nil {
+		gateway.SetBaseURL(baseURL)
+	}
+	return nil
 }
 
 // QuotaAdjustmentRequest is the operator payload for CDK top-ups.

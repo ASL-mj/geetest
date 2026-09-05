@@ -12,15 +12,31 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/captchaflow/service-platform/api/internal/config"
 )
 
-// Gateway exposes the single V1 operation: solve one slide captcha.
+// Gateway exposes the single V1 operation: solve one slide captcha. The
+// base URL can be overridden at runtime from the admin system settings.
 type Gateway struct {
-	baseURL    string
+	url        atomic.Value // holds string
 	serviceKey string
 	client     *http.Client
+}
+
+// SetBaseURL hot-swaps the solver endpoint; concurrent Solve calls observe
+// either the old or the new value, never a torn one.
+func (g *Gateway) SetBaseURL(url string) {
+	g.url.Store(url)
+}
+
+// currentBaseURL resolves the runtime override.
+func (g *Gateway) currentBaseURL() string {
+	if v, ok := g.url.Load().(string); ok && v != "" {
+		return v
+	}
+	return ""
 }
 
 // NewGateway builds the HTTP client with strict connect/read/total timeouts.
@@ -28,14 +44,15 @@ func NewGateway(settings config.Settings) *Gateway {
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{Timeout: settings.SolverConnectTimeout}).DialContext,
 	}
-	return &Gateway{
-		baseURL:    settings.GeetestSolverURL,
+	g := &Gateway{
 		serviceKey: settings.GeetestServiceAPIKey,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   settings.SolverTotalTimeout,
 		},
 	}
+	g.url.Store(settings.GeetestSolverURL)
+	return g
 }
 
 // SolveRequest is the platform-facing input.
@@ -74,7 +91,7 @@ func (g *Gateway) Solve(ctx context.Context, requestID string, req SolveRequest)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSolverBad, err)
 	}
-	endpoint := g.baseURL
+	endpoint := g.currentBaseURL()
 	if !endsWithV1Solve(endpoint) {
 		endpoint = trimTrailingSlash(endpoint) + "/v1/geetest/solve"
 	}

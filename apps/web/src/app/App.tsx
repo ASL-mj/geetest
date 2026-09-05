@@ -7,11 +7,11 @@ import {
   ChevronRight,
   CircleUserRound,
   Copy,
-  CreditCard,
   FileText,
   KeyRound,
   LayoutDashboard,
   LogOut,
+  PenLine,
   Play,
   Plus,
   RefreshCw,
@@ -45,7 +45,6 @@ const navigation: NavigationItem[] = [
   { id: 'usage', label: '用量统计', icon: BarChart3 },
   { id: 'calls', label: '调用日志', icon: FileText },
   { id: 'docs', label: '接口文档', icon: BookOpen },
-  { id: 'account', label: '账号与服务', icon: CircleUserRound },
 ];
 
 const pageTitles: Record<PageId, { title: string; description: string }> = {
@@ -65,8 +64,8 @@ function StatusPill({ children, tone = 'neutral' }: { children: string; tone?: S
 function CopyButton({ text, label = '复制内容', compact = false }: { text: string; label?: string; compact?: boolean }) {
   const [copied, setCopied] = useState(false);
 
-  const copy = async () => {
-    await navigator.clipboard?.writeText(text);
+  const copy = () => {
+    navigator.clipboard?.writeText(text).catch(() => {});
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
   };
@@ -225,11 +224,17 @@ function Dashboard({ goTo }: { goTo: (page: PageId) => void }) {
 
 // ---------- keys ----------
 
-function KeysPage({ onChanged }: { onChanged: () => void }) {
+const keyLimit = 5;
+
+function KeysPage() {
   const [keys, setKeys] = useState<APIKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [editTarget, setEditTarget] = useState<APIKey | null>(null);
+  const [revealed, setRevealed] = useState<{ secret?: string; error?: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
+  const refresh = () => setReloadKey((value) => value + 1);
 
   useEffect(() => {
     let alive = true;
@@ -244,8 +249,6 @@ function KeysPage({ onChanged }: { onChanged: () => void }) {
     return () => { alive = false; };
   }, [reloadKey]);
 
-  const refresh = () => { setReloadKey((value) => value + 1); onChanged(); };
-
   const toggle = async (key: APIKey) => {
     await api.updateKey(key.id, { status: key.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' });
     refresh();
@@ -255,17 +258,32 @@ function KeysPage({ onChanged }: { onChanged: () => void }) {
     await api.deleteKey(key.id);
     refresh();
   };
+  const copySecret = async (key: APIKey) => {
+    try {
+      const envelope = await api.revealKeySecret(key.id);
+      const secret = envelope.data?.secret ?? '';
+      if (!secret) throw new ApiError(422, 'KEY_SECRET_UNAVAILABLE', '该 Key 缺少可恢复的密文。', '');
+      // Show the dialog first; the clipboard write is best-effort because a
+      // pending permission prompt must never block the UI.
+      setRevealed({ secret });
+      navigator.clipboard?.writeText(secret).catch(() => {});
+    } catch (err) {
+      setRevealed({ error: err instanceof ApiError ? err.message : '无法获取密钥明文。' });
+    }
+  };
 
   if (error) return <LoadError message={error} onRetry={refresh} />;
+  const activeCount = keys?.filter((key) => key.status !== 'DELETED').length ?? 0;
 
   return (
     <>
-      <section className="surface key-summary">
-        <div><p className="eyebrow">API KEY 限额</p><strong>{keys?.length ?? 0} <span>/ 5</span></strong><p>所有 Key 共享 CDK 额度池。</p></div>
-        <button className="primary-button" onClick={() => setShowCreate(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>
-      </section>
       <section className="surface">
-        <SectionHeading title="我的 API Key" detail="已删除的 Key 不再显示，历史调用日志仍可追溯。" />
+        <SectionHeading
+          title="我的 API Key"
+          detail="已删除的 Key 不再显示，历史调用日志仍可追溯。"
+          action={<button className="primary-button" onClick={() => setShowCreate(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}
+        />
+        <p className="key-count-hint">共 <b>{activeCount}</b> / {keyLimit} 个（所有 Key 共享 CDK 额度池）</p>
         {keys === null
           ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
           : keys.length === 0
@@ -273,7 +291,7 @@ function KeysPage({ onChanged }: { onChanged: () => void }) {
             : (
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>名称</th><th>密钥标识</th><th>状态</th><th>调用次数</th><th>最后使用</th><th>创建时间</th><th aria-label="操作" /></tr></thead>
+                  <thead><tr><th>名称</th><th>密钥标识</th><th>状态</th><th>限额</th><th>IP 白名单</th><th>调用次数</th><th>最后使用</th><th aria-label="操作" /></tr></thead>
                   <tbody>{keys.map((key) => {
                     const meta = keyStatusMeta(key.status);
                     return (
@@ -281,12 +299,15 @@ function KeysPage({ onChanged }: { onChanged: () => void }) {
                         <td><strong className="table-name">{key.name}</strong></td>
                         <td><code>{key.prefix}…{key.last4}</code></td>
                         <td><StatusPill tone={meta.tone}>{meta.label}</StatusPill></td>
+                        <td className="mono">{key.quota_limit != null ? formatCount(key.quota_limit) : '不限'}</td>
+                        <td>{key.allowed_ips ? <code className="mono">{key.allowed_ips}</code> : '不限'}</td>
                         <td className="mono">{formatCount(key.total_calls)}</td>
                         <td>{formatTime(key.last_used_at)}</td>
-                        <td>{formatTime(key.created_at)}</td>
                         <td>
                           {key.status !== 'DELETED' && (
                             <>
+                              <button className="icon-button" onClick={() => void copySecret(key)} title="复制完整密钥" type="button"><Copy aria-hidden="true" size={16} /></button>
+                              <button className="icon-button" onClick={() => setEditTarget(key)} title="编辑" type="button"><PenLine aria-hidden="true" size={16} /></button>
                               <button className="icon-button" onClick={() => void toggle(key)} title={key.status === 'ACTIVE' ? '禁用' : '启用'} type="button"><RefreshCw aria-hidden="true" size={16} /></button>
                               <button className="icon-button" onClick={() => void remove(key)} title="删除" type="button"><Trash2 aria-hidden="true" size={16} /></button>
                             </>
@@ -300,7 +321,65 @@ function KeysPage({ onChanged }: { onChanged: () => void }) {
             )}
       </section>
       {showCreate && <CreateKeyDialog onClose={() => setShowCreate(false)} onCreated={refresh} />}
+      {editTarget && <EditKeyDialog key={editTarget.id} apiKey={editTarget} onClose={() => setEditTarget(null)} onSaved={refresh} />}
+      {revealed && (
+        <div className="dialog-backdrop" role="presentation">
+          <section aria-labelledby="reveal-title" aria-modal="true" className="dialog" role="dialog">
+            <div className="dialog__header"><div><h2 id="reveal-title">{revealed.secret ? '密钥明文' : '无法显示明文'}</h2><p>{revealed.secret ? '已复制到剪贴板；请勿泄露给他人。' : '该 Key 创建于历史版本，没有可恢复的密文；请新建 Key 并使用新密钥。'}</p></div><button className="icon-button" onClick={() => setRevealed(null)} title="关闭" type="button"><X aria-hidden="true" size={18} /></button></div>
+            {revealed.secret && <div className="secret-field"><code>{revealed.secret}</code><CopyButton compact label="复制" text={revealed.secret} /></div>}
+            <div className="dialog__actions"><button className="primary-button" onClick={() => setRevealed(null)} type="button">完成</button></div>
+          </section>
+        </div>
+      )}
     </>
+  );
+}
+
+function EditKeyDialog({ apiKey, onClose, onSaved }: { apiKey: APIKey; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(apiKey.name);
+  const [quotaLimit, setQuotaLimit] = useState(apiKey.quota_limit?.toString() ?? '');
+  const [allowedIPs, setAllowedIPs] = useState(apiKey.allowed_ips ?? '');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const trimmedQuota = quotaLimit.trim();
+      await api.updateKey(apiKey.id, {
+        name: name.trim(),
+        quota_limit: trimmedQuota === '' ? 0 : Number(trimmedQuota),
+        allowed_ips: allowedIPs.trim(),
+      });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '保存失败，请稍后重试。');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section aria-labelledby="edit-key-title" aria-modal="true" className="dialog" role="dialog">
+        <div className="dialog__header"><div><h2 id="edit-key-title">编辑 API Key</h2><p>{apiKey.prefix}…{apiKey.last4}</p></div><button className="icon-button" onClick={onClose} title="关闭弹窗" type="button"><X aria-hidden="true" size={18} /></button></div>
+        <label htmlFor="edit-name">名称</label>
+        <input id="edit-name" onChange={(event) => setName(event.target.value)} value={name} />
+        <label htmlFor="edit-quota">限额次数（留空或 0 表示不限）</label>
+        <input id="edit-quota" inputMode="numeric" min={0} onChange={(event) => setQuotaLimit(event.target.value)} placeholder="例如：1000" type="number" value={quotaLimit} />
+        <p className="field-hint">达到限额后该 Key 将被拒绝调用（402），不影响其他 Key。</p>
+        <label htmlFor="edit-ips">IP 白名单（IP 或 CIDR，逗号分隔；留空表示不限）</label>
+        <textarea id="edit-ips" onChange={(event) => setAllowedIPs(event.target.value)} placeholder="例如：203.0.113.7, 198.51.100.0/24" rows={2} value={allowedIPs} />
+        <p className="field-hint">启用后，只有白名单内来源 IP 可以使用该 Key 调用解析接口。</p>
+        {error && <p className="field-hint" role="alert">{error}</p>}
+        <div className="dialog__actions">
+          <button className="quiet-button" onClick={onClose} type="button">取消</button>
+          <button className="primary-button" disabled={!name.trim() || submitting} onClick={() => void save()} type="button">{submitting ? '保存中…' : '保存'}</button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -554,6 +633,20 @@ function AccountPage() {
           <div><span>到期时间</span><b>{formatTime(cdk?.expires_at ?? null)}</b></div>
         </div>
       </section>
+      <section className="surface">
+        <SectionHeading title="服务与账单" detail="接入信息与额度概览。" />
+        <div className="endpoint-row">
+          <code>POST {window.location.origin}/v1/captcha/solve</code>
+          <CopyButton compact label="复制地址" text={`${window.location.origin}/v1/captcha/solve`} />
+        </div>
+        <div className="definition-list">
+          <div><span>平台服务</span><b><StatusPill tone="success">运行正常</StatusPill></b></div>
+          <div><span>额度总量</span><b className="mono">{formatCount(cdk?.quota_total ?? 0)}</b></div>
+          <div><span>已使用</span><b className="mono">{formatCount(cdk?.quota_used ?? 0)}</b></div>
+          <div><span>剩余可用</span><b className="mono">{formatCount(cdk?.quota_remaining ?? 0)}</b></div>
+        </div>
+        <p className="field-hint">额度充值或续期请联系管理员，通过配额流水完成。</p>
+      </section>
     </div>
   );
 }
@@ -664,7 +757,7 @@ export function App() {
   const renderPage = () => {
     switch (activePage) {
       case 'dashboard': return <Dashboard goTo={(page) => navigate(consolePath(page))} />;
-      case 'keys': return <KeysPage onChanged={() => setSessionEpoch((value) => value + 1)} />;
+      case 'keys': return <KeysPage />;
       case 'debug': return <DebugPage />;
       case 'usage': return <UsagePage />;
       case 'calls': return <CallsPage />;
@@ -693,11 +786,11 @@ export function App() {
             return <button className={`nav-item ${activePage === item.id ? 'nav-item--active' : ''}`} key={item.id} onClick={() => navigate(consolePath(item.id))} type="button"><Icon aria-hidden="true" size={18} /><span>{item.label}</span></button>;
           })}
         </nav>
-        <div className="sidebar__bottom"><div className="service-mini"><span><Activity aria-hidden="true" size={15} />服务运行正常</span><small>API 可用</small></div><button className="sidebar-help" type="button"><CreditCard aria-hidden="true" size={17} />服务与账单</button><button className="sidebar-logout" onClick={() => void logout()} type="button"><LogOut aria-hidden="true" size={17} />退出登录</button></div>
+        <div className="sidebar__bottom"><div className="service-mini"><span><Activity aria-hidden="true" size={15} />服务运行正常</span><small>API 可用</small></div><button className="sidebar-help" onClick={() => navigate(consolePath('account'))} type="button"><CircleUserRound aria-hidden="true" size={17} />账号与服务</button><button className="sidebar-logout" onClick={() => void logout()} type="button"><LogOut aria-hidden="true" size={17} />退出登录</button></div>
       </aside>
       <div className="app-main">
         <header className="topbar"><div className="breadcrumb"><span>用户控制台</span><ChevronRight aria-hidden="true" size={15} /><b>{activeTitle.title}</b></div><div className="topbar__actions"><StatusPill tone="success">平台服务正常</StatusPill></div></header>
-        <main className="content"><div className="page-title"><div><p className="eyebrow">CAPTCHA SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{(activePage === 'dashboard' || activePage === 'keys') && <button className="primary-button page-title__button" onClick={() => navigate(consolePath('keys'))} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
+        <main className="content"><div className="page-title"><div><p className="eyebrow">CAPTCHA SERVICE</p><h1>{activeTitle.title}</h1><p>{activeTitle.description}</p></div>{activePage === 'dashboard' && <button className="primary-button page-title__button" onClick={() => navigate(consolePath('keys'))} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}</div>{renderPage()}</main>
       </div>
     </div>
   );

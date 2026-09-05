@@ -20,6 +20,8 @@ func serializeAPIKey(key domain.APIKey) map[string]any {
 		"prefix":      key.KeyPrefix,
 		"last4":       key.KeyLast4,
 		"status":      string(key.Status),
+		"quota_limit": key.QuotaLimit,
+		"allowed_ips": key.AllowedIPs,
 		"total_calls": key.TotalCalls,
 		"created_at":  key.CreatedAt.UTC().Format(timeFormat),
 	}
@@ -100,13 +102,19 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Name   *string `json:"name"`
-		Status *string `json:"status"`
+		Name       *string `json:"name"`
+		Status     *string `json:"status"`
+		QuotaLimit *int64  `json:"quota_limit"`
+		AllowedIPs *string `json:"allowed_ips"`
 	}
 	if !decodeJSON(w, r, &payload) {
 		return
 	}
-	if payload.Name == nil && payload.Status == nil {
+	if payload.Name == nil && payload.Status == nil && payload.QuotaLimit == nil && payload.AllowedIPs == nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return
+	}
+	if payload.QuotaLimit != nil && *payload.QuotaLimit < 0 {
 		writeApplicationError(w, service.ErrInvalidRequest())
 		return
 	}
@@ -130,12 +138,38 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		status = &parsed
 	}
 
-	updated, appErr := s.services.UpdateAPIKey(r.Context(), *parseUUID(userFromContext(r).UserID), *keyID, name, status)
+	if payload.Status != nil {
+		updated, appErr := s.services.UpdateAPIKey(r.Context(), *parseUUID(userFromContext(r).UserID), *keyID, name, status)
+		if appErr != nil {
+			writeApplicationError(w, appErr)
+			return
+		}
+		writeSuccess(w, newRequestID(), http.StatusOK, serializeAPIKey(updated))
+		return
+	}
+
+	updated, appErr := s.services.UpdateAPIKeyPolicy(r.Context(), *parseUUID(userFromContext(r).UserID), *keyID, name, payload.QuotaLimit, payload.AllowedIPs)
 	if appErr != nil {
 		writeApplicationError(w, appErr)
 		return
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, serializeAPIKey(updated))
+}
+
+// handleRevealKeySecret decrypts the stored ciphertext for the owning
+// session so the console can copy an existing key again.
+func (s *Server) handleRevealKeySecret(w http.ResponseWriter, r *http.Request) {
+	keyID := parseUUID(r.PathValue("key_id"))
+	if keyID == nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return
+	}
+	secret, appErr := s.services.RevealAPIKeySecret(r.Context(), *parseUUID(userFromContext(r).UserID), *keyID)
+	if appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"secret": secret})
 }
 
 // handleDeleteKey soft-deletes a key into the DELETED terminal state.
