@@ -523,10 +523,9 @@ function CallsPage() {
 
 // ---------- account ----------
 
-function AccountPage({ onLogout }: { onLogout: () => void }) {
+function AccountPage() {
   const [cdk, setCdk] = useState<CDKSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -541,15 +540,6 @@ function AccountPage({ onLogout }: { onLogout: () => void }) {
     return () => { alive = false; };
   }, []);
 
-  const logout = async () => {
-    setLoggingOut(true);
-    try {
-      await api.logout();
-    } finally {
-      onLogout();
-    }
-  };
-
   if (error) return <LoadError message={error} onRetry={() => window.location.reload()} />;
 
   return (
@@ -563,10 +553,6 @@ function AccountPage({ onLogout }: { onLogout: () => void }) {
           <div><span>服务状态</span>{cdk && <StatusPill tone={cdkStatusMeta(cdk.status).tone}>{cdkStatusMeta(cdk.status).label}</StatusPill>}</div>
           <div><span>到期时间</span><b>{formatTime(cdk?.expires_at ?? null)}</b></div>
         </div>
-      </section>
-      <section className="surface account-danger">
-        <SectionHeading title="会话与安全" detail="退出操作会立即撤销当前浏览器会话。" />
-        <button className="danger-button" disabled={loggingOut} onClick={() => void logout()} type="button"><LogOut aria-hidden="true" size={16} />{loggingOut ? '正在退出…' : '退出当前会话'}</button>
       </section>
     </div>
   );
@@ -683,7 +669,16 @@ export function App() {
       case 'usage': return <UsagePage />;
       case 'calls': return <CallsPage />;
       case 'docs': return <DocsPage />;
-      case 'account': return <AccountPage onLogout={() => { setSessionEpoch((value) => value + 1); navigate('/'); }} />;
+      case 'account': return <AccountPage />;
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await api.logout();
+    } finally {
+      setSessionEpoch((value) => value + 1);
+      navigate('/');
     }
   };
 
@@ -698,7 +693,7 @@ export function App() {
             return <button className={`nav-item ${activePage === item.id ? 'nav-item--active' : ''}`} key={item.id} onClick={() => navigate(consolePath(item.id))} type="button"><Icon aria-hidden="true" size={18} /><span>{item.label}</span></button>;
           })}
         </nav>
-        <div className="sidebar__bottom"><div className="service-mini"><span><Activity aria-hidden="true" size={15} />服务运行正常</span><small>API 可用</small></div><button className="sidebar-help" type="button"><CreditCard aria-hidden="true" size={17} />服务与账单</button></div>
+        <div className="sidebar__bottom"><div className="service-mini"><span><Activity aria-hidden="true" size={15} />服务运行正常</span><small>API 可用</small></div><button className="sidebar-help" type="button"><CreditCard aria-hidden="true" size={17} />服务与账单</button><button className="sidebar-logout" onClick={() => void logout()} type="button"><LogOut aria-hidden="true" size={17} />退出登录</button></div>
       </aside>
       <div className="app-main">
         <header className="topbar"><div className="breadcrumb"><span>用户控制台</span><ChevronRight aria-hidden="true" size={15} /><b>{activeTitle.title}</b></div><div className="topbar__actions"><StatusPill tone="success">平台服务正常</StatusPill></div></header>

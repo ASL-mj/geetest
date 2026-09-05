@@ -135,6 +135,27 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/');
   });
 
+  it('logs out from the sidebar button and returns to the public home', async () => {
+    accountMock.mockResolvedValueOnce({
+      success: true,
+      request_id: 'req_test',
+      data: {
+        cdk: {
+          code_prefix: 'CAPTCHAD', status: 'ACTIVE', activated_at: null, expires_at: null,
+          quota_total: 100, quota_used: 0, quota_reserved: 0, quota_remaining: 100,
+        },
+      },
+    });
+    accountMock.mockRejectedValue(new Error('session revoked'));
+    window.history.replaceState({}, '', '/console/dashboard');
+    render(<App />);
+
+    await screen.findByRole('heading', { name: '控制台概览' });
+    fireEvent.click(screen.getByRole('button', { name: '退出登录' }));
+    expect(await screen.findByRole('button', { name: /登录 \/ 激活/ })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+  });
+
   it('serves console deep links directly when a session cookie is valid', async () => {
     accountMock.mockResolvedValue({
       success: true,

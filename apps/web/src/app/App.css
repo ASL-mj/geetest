@@ -20,7 +20,7 @@ code, pre, .mono, .mono-link { font-family: "SFMono-Regular", Consolas, "Liberat
 .brand__mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #3a5064; border-radius: 7px; background: #20303e; color: #44c3a4; }
 .workspace-label { padding: 0 10px 8px; color: #8fa1b2; font-size: 11px; font-weight: 700; }
 .sidebar nav { display: grid; gap: 3px; }
-.nav-item, .sidebar-help { width: 100%; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 6px; background: transparent; color: #b7c4d0; text-align: left; font-size: 14px; min-height: 40px; padding: 0 10px; }
+.nav-item, .sidebar-help, .sidebar-logout { width: 100%; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 6px; background: transparent; color: #b7c4d0; text-align: left; font-size: 14px; min-height: 40px; padding: 0 10px; cursor: pointer; }.sidebar-logout { margin-top: 2px; }.sidebar-logout:hover { background: #3a2326; color: #ffb4ab; }.sidebar-logout:disabled { cursor: wait; opacity: .55; }
 .nav-item:hover, .sidebar-help:hover { background: #22313f; color: #f8fafc; }
 .nav-item--active { background: #294153; color: #f8fafc; box-shadow: inset 3px 0 0 #43c4a4; }
 .sidebar__bottom { margin-top: auto; display: grid; gap: 3px; border-top: 1px solid #2a3a48; padding-top: 14px; }
