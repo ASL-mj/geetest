@@ -731,6 +731,7 @@ export function App() {
   // links all resolve through the history router.
   const route = useRoute();
   const [sessionEpoch, setSessionEpoch] = useState(0);
+  const sessionProbeCount = useRef(0);
   // Session probe result for console routes: null = still checking. Admin
   // routes manage their own login gate inside AdminPage.
   const [consoleSession, setConsoleSession] = useState<'checking' | 'guest' | 'authenticated'>('checking');
@@ -738,7 +739,11 @@ export function App() {
   // Any API 401 (expired/revoked session) forces a fresh probe; the console
   // route then redirects to activation instead of endless load errors.
   useEffect(() => {
-    const onUnauthorized = () => setSessionEpoch((value) => value + 1);
+    const onUnauthorized = () => {
+      // The probe intentionally receives a 401 for guest pages. Do not let
+      // that expected response recursively restart the probe itself.
+      if (sessionProbeCount.current === 0) setSessionEpoch((value) => value + 1);
+    };
     window.addEventListener('captchaflow:unauthorized', onUnauthorized);
     return () => window.removeEventListener('captchaflow:unauthorized', onUnauthorized);
   }, []);
@@ -748,6 +753,7 @@ export function App() {
   // does not re-probe.
   useEffect(() => {
     let alive = true;
+    sessionProbeCount.current += 1;
     setConsoleSession('checking');
     void (async () => {
       try {
@@ -755,6 +761,8 @@ export function App() {
         if (alive) setConsoleSession('authenticated');
       } catch {
         if (alive) setConsoleSession('guest');
+      } finally {
+        sessionProbeCount.current = Math.max(0, sessionProbeCount.current - 1);
       }
     })();
     return () => { alive = false; };
