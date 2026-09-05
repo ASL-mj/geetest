@@ -100,8 +100,9 @@ func TestAPIKeyPolicyRestrictsCalls(t *testing.T) {
 	}
 }
 
-// TestSystemConfigUpdatesSolverBaseURL covers the runtime override surface.
-func TestSystemConfigUpdatesSolverBaseURL(t *testing.T) {
+// TestSystemConfigHoldsDisplayBaseURL covers the docs-facing base URL: it is
+// a display value only and must never touch the solver configuration.
+func TestSystemConfigHoldsDisplayBaseURL(t *testing.T) {
 	h := newHarness(t)
 	seedAdmin(t, h, "config-admin", store.AdminRoleAdmin)
 	login := adminLogin(t, h, "config-admin")
@@ -112,11 +113,17 @@ func TestSystemConfigUpdatesSolverBaseURL(t *testing.T) {
 		t.Fatalf("get config failed: %d %v", status, payload)
 	}
 	data, _ := payload["data"].(map[string]any)
-	if data["solver_source"] != "default" {
-		t.Fatalf("expected default source, got %v", data)
+	if data["api_base_url"] != "" || data["has_override"] != false {
+		t.Fatalf("expected empty default config, got %v", data)
+	}
+	// Public meta mirrors the unset state.
+	resp = h.do("GET", "/v1/meta", "")
+	_, payload = decodeEnvelope(t, resp)
+	if data, _ = payload["data"].(map[string]any); data["api_base_url"] != "" {
+		t.Fatalf("public meta should be empty by default, got %v", data)
 	}
 
-	body := `{"solver_base_url": "https://solver-backup.internal.example.com", "reason": "机房切换"}`
+	body := `{"api_base_url": "https://api.captchaflow.example.com", "reason": "接入文档更新"}`
 	resp = h.do("PUT", "/admin/v1/system/config", body, login)
 	if status, payload := decodeEnvelope(t, resp); status != http.StatusOK {
 		t.Fatalf("put config failed: %d %v", status, payload)
@@ -125,19 +132,24 @@ func TestSystemConfigUpdatesSolverBaseURL(t *testing.T) {
 	resp = h.do("GET", "/admin/v1/system/config", "", login)
 	_, payload = decodeEnvelope(t, resp)
 	data, _ = payload["data"].(map[string]any)
-	if data["solver_base_url"] != "https://solver-backup.internal.example.com" || data["solver_source"] != "override" {
-		t.Fatalf("override not applied: %v", data)
+	if data["api_base_url"] != "https://api.captchaflow.example.com" || data["has_override"] != true {
+		t.Fatalf("override not stored: %v", data)
+	}
+	// Public meta now serves the display URL.
+	resp = h.do("GET", "/v1/meta", "")
+	_, payload = decodeEnvelope(t, resp)
+	if data, _ = payload["data"].(map[string]any); data["api_base_url"] != "https://api.captchaflow.example.com" {
+		t.Fatalf("public meta not updated: %v", data)
 	}
 
 	// Invalid URL is a 422 and does not overwrite the stored value.
-	resp = h.do("PUT", "/admin/v1/system/config", `{"solver_base_url": "not-a-url", "reason": "x"}`, login)
+	resp = h.do("PUT", "/admin/v1/system/config", `{"api_base_url": "not-a-url", "reason": "x"}`, login)
 	if status, _ := decodeEnvelope(t, resp); status != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid url should 422")
 	}
-	resp = h.do("GET", "/admin/v1/system/config", "", login)
+	resp = h.do("GET", "/v1/meta", "")
 	_, payload = decodeEnvelope(t, resp)
-	data, _ = payload["data"].(map[string]any)
-	if data["solver_base_url"] != "https://solver-backup.internal.example.com" {
+	if data, _ = payload["data"].(map[string]any); data["api_base_url"] != "https://api.captchaflow.example.com" {
 		t.Fatalf("failed write must not clobber config: %v", data)
 	}
 }

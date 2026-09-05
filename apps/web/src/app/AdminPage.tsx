@@ -5,6 +5,7 @@ import {
   FileText,
   KeyRound,
   LayoutDashboard,
+  LogOut,
   Plus,
   RefreshCw,
   ServerCog,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 
-import { adminApi, ApiError, type AdminAuditEntry, type AdminCdk, type AdminDashboard } from '../lib/api';
+import { adminApi, ApiError, type AdminAuditEntry, type AdminCdk, type AdminDashboard, type SystemConfig } from '../lib/api';
 import { adminPath, navigate, useRoute, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
 
@@ -446,7 +447,7 @@ function HealthSection() {
 }
 
 function SystemSection() {
-  const [config, setConfig] = useState<{ solver_base_url: string; solver_source: string } | null>(null);
+  const [config, setConfig] = useState<SystemConfig | null>(null);
   const [baseURL, setBaseURL] = useState('');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -456,9 +457,9 @@ function SystemSection() {
   const load = () => {
     void adminApi.getSystemConfig()
       .then((envelope) => {
-        const data = envelope.data ?? { solver_base_url: '', solver_source: 'default' };
+        const data = envelope.data ?? { api_base_url: '', has_override: false };
         setConfig(data);
-        setBaseURL(data.solver_base_url);
+        setBaseURL(data.api_base_url);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
   };
@@ -469,7 +470,7 @@ function SystemSection() {
     setError(null);
     setSaved(false);
     try {
-      await adminApi.setSystemConfig({ solver_base_url: baseURL.trim(), reason: reason.trim() });
+      await adminApi.setSystemConfig({ api_base_url: baseURL.trim(), reason: reason.trim() });
       setSaved(true);
       setReason('');
       load();
@@ -483,22 +484,22 @@ function SystemSection() {
   if (error && !config) return <AdminError message={error} onRetry={load} />;
   return (
     <section className="admin-panel">
-      <div className="admin-panel__heading"><div><h2>系统配置</h2><p>修改后立即生效并写入审计，无需重启服务。</p></div></div>
+      <div className="admin-panel__heading"><div><h2>系统配置</h2><p>展示类配置，保存后立即写入审计。</p></div></div>
       <div className="system-config-form">
-        <label htmlFor="solver-url">底层解析服务地址（Base URL）</label>
-        <input id="solver-url" onChange={(event) => setBaseURL(event.target.value)} placeholder="https://solver.internal.example.com" value={baseURL} />
+        <label htmlFor="api-base-url">平台接入地址（文档展示用）</label>
+        <input id="api-base-url" onChange={(event) => setBaseURL(event.target.value)} placeholder="例如：https://api.captchaflow.cn" value={baseURL} />
         <p className="field-hint">
-          当前来源：{config?.solver_source === 'override'
-            ? <AdminStatus tone="warning">运行时配置</AdminStatus>
-            : <AdminStatus tone="success">环境变量默认值</AdminStatus>}
-          。切换地址后新的解析请求立即使用新端点。
+          仅用于公开文档与控制台文档中的示例地址展示；{config?.has_override
+            ? <AdminStatus tone="warning">已自定义</AdminStatus>
+            : <AdminStatus tone="success">未设置（文档使用当前域名）</AdminStatus>}
+          。底层解析服务不受此项影响。
         </p>
-        <label htmlFor="solver-reason">操作原因</label>
-        <input id="solver-reason" onChange={(event) => setReason(event.target.value)} placeholder="将写入审计日志" value={reason} />
+        <label htmlFor="api-base-reason">操作原因</label>
+        <input id="api-base-reason" onChange={(event) => setReason(event.target.value)} placeholder="将写入审计日志" value={reason} />
         {error && <p className="field-hint" role="alert">{error}</p>}
-        {saved && <p className="field-hint system-saved"><CheckCircle2 aria-hidden="true" size={14} />已保存并即时生效。</p>}
+        {saved && <p className="field-hint system-saved"><CheckCircle2 aria-hidden="true" size={14} />已保存，文档立即使用新地址。</p>}
         <div className="dialog__actions">
-          <button className="primary-button" disabled={!baseURL.trim() || !reason.trim() || saving || baseURL === config?.solver_base_url} onClick={() => void save()} type="button">{saving ? '保存中…' : '保存配置'}</button>
+          <button className="primary-button" disabled={!baseURL.trim() || !reason.trim() || saving || baseURL === config?.api_base_url} onClick={() => void save()} type="button">{saving ? '保存中…' : '保存配置'}</button>
         </div>
       </div>
     </section>
@@ -550,7 +551,18 @@ export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSe
   const route = useRoute();
   const section: AdminSection = route.name === 'admin' ? route.section : (initialSection ?? 'overview');
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
   const current = adminNavigation.find((item) => item.id === section) ?? adminNavigation[0];
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await adminApi.logout();
+    } finally {
+      setLoggingOut(false);
+      setAuthenticated(false);
+    }
+  };
 
   // Probe whether an operator cookie already exists.
   useEffect(() => {
@@ -583,7 +595,10 @@ export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSe
             );
           })}
         </nav>
-        <button className="admin-exit" onClick={onExit} type="button"><ArrowLeft aria-hidden="true" size={16} />返回用户入口</button>
+        <div className="admin-sidebar__bottom">
+          <button className="admin-exit" onClick={onExit} type="button"><ArrowLeft aria-hidden="true" size={16} />返回用户入口</button>
+          <button className="admin-logout" disabled={loggingOut} onClick={() => void handleLogout()} type="button"><LogOut aria-hidden="true" size={15} />{loggingOut ? '正在退出…' : '退出登录'}</button>
+        </div>
       </aside>
       <main className="admin-main">
         <header className="admin-topbar"><div><span>管理员后台</span><b> / {current.label}</b></div><div><AdminStatus>已登录</AdminStatus><span className="admin-avatar">AD</span></div></header>

@@ -1,7 +1,7 @@
 import { ArrowRight, BookOpen, Check, CircleCheck, Code2, Copy, FileCode2, KeyRound, LockKeyhole, ShieldCheck, Terminal, Zap } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 
-import { ApiError, api } from '../lib/api';
+import { ApiError, api, getDocsBaseURL } from '../lib/api';
 
 type PublicHeaderProps = { onBack?: () => void; onDocs: () => void; onStart: () => void; docsActive?: boolean; session?: 'checking' | 'guest' | 'authenticated'; onConsole?: () => void };
 type PublicHomeProps = { onStart: () => void; onDocs: () => void; onAdmin: () => void; session?: 'checking' | 'guest' | 'authenticated'; onConsole?: () => void };
@@ -50,7 +50,15 @@ export function AuthPage({ onBack, onDocs, onSuccess }: AuthPageProps) {
 }
 
 export function PublicDocs({ onBack, onStart, session = 'guest', onConsole }: PublicDocsProps) {
-  const snippet = `curl -X POST https://api.your-domain.com/v1/captcha/solve \\\n  -H "Authorization: Bearer cf_live_your_key" \\\n  -H "Content-Type: application/json" \\\n  -H "Idempotency-Key: your-unique-request-id" \\\n  -d '{"captcha_id":"captcha_xxx","risk_type":"slide"}'`;
+  // Snippets show the operator-configured display base URL when set; the
+  // placeholder stays until the public meta resolves.
+  const [snippet, setSnippet] = useState(`curl -X POST https://api.your-domain.com/v1/captcha/solve \\\n  -H "Authorization: Bearer cf_live_your_key" \\\n  -H "Content-Type: application/json" \\\n  -H "Idempotency-Key: your-unique-request-id" \\\n  -d '{"captcha_id":"captcha_xxx","risk_type":"slide"}'`);
+  useEffect(() => {
+    void getDocsBaseURL().then((base) => {
+      if (base === window.location.origin) return;
+      setSnippet(`curl -X POST ${base}/v1/captcha/solve \\\n  -H "Authorization: Bearer cf_live_your_key" \\\n  -H "Content-Type: application/json" \\\n  -H "Idempotency-Key: your-unique-request-id" \\\n  -d '{"captcha_id":"captcha_xxx","risk_type":"slide"}'`);
+    });
+  }, []);
   const copySnippet = () => void navigator.clipboard?.writeText(snippet);
   // Sidebar entries switch the visible section instead of jumping inside one
   // long page; anchors keep the existing styling with preventDefault.

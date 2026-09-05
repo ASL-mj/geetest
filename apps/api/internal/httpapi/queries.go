@@ -43,6 +43,18 @@ func serializeCall(record store.CallRecord) map[string]any {
 	}
 }
 
+// handlePublicMeta exposes the display base URL for anonymous docs pages.
+func (s *Server) handlePublicMeta(w http.ResponseWriter, r *http.Request) {
+	meta, appErr := s.services.GetPublicMeta(r.Context())
+	if appErr != nil {
+		writeApplicationError(w, appErr)
+		return
+	}
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{
+		"api_base_url": meta.APIBaseURL,
+	})
+}
+
 // handleGetAccount returns the bound CDK and quota summary.
 func (s *Server) handleGetAccount(w http.ResponseWriter, r *http.Request) {
 	userID := *parseUUID(userFromContext(r).UserID)

@@ -24,7 +24,7 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { AdminPage } from './AdminPage';
 import { AuthPage, PublicDocs, PublicHome } from './PublicPages';
-import { ApiError, api, type APIKey, type CallRecord, type CDKSummary, type UsageReport } from '../lib/api';
+import { ApiError, api, getDocsBaseURL, type APIKey, type CallRecord, type CDKSummary, type UsageReport } from '../lib/api';
 import { consolePath, navigate, useRoute, type ConsolePage } from '../lib/router';
 import { callStatusMeta, cdkStatusMeta, formatCount, formatTime, keyStatusMeta, type StatusTone } from '../lib/status';
 
@@ -145,6 +145,11 @@ function Dashboard({ goTo }: { goTo: (page: PageId) => void }) {
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [baseURL, setBaseURL] = useState(window.location.origin);
+
+  useEffect(() => {
+    void getDocsBaseURL().then(setBaseURL);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -196,10 +201,10 @@ function Dashboard({ goTo }: { goTo: (page: PageId) => void }) {
         <article className="surface endpoint-surface">
           <SectionHeading title="接入地址" detail="通过平台 API 调用解析服务" />
           <div className="endpoint-row">
-            <code>POST /v1/captcha/solve</code>
-            <CopyButton compact label="复制接口地址" text={`${window.location.origin}/v1/captcha/solve`} />
+            <code>POST {baseURL}/v1/captcha/solve</code>
+            <CopyButton compact label="复制接口地址" text={`${baseURL}/v1/captcha/solve`} />
           </div>
-          <pre aria-label="请求示例"><code>{`curl -X POST ${window.location.origin}/v1/captcha/solve \\
+          <pre aria-label="请求示例"><code>{`curl -X POST ${baseURL}/v1/captcha/solve \\
   -H "Authorization: Bearer cf_live_..." \\
   -H "Idempotency-Key: request-unique-id"`}</code></pre>
           <div className="endpoint-footer"><Terminal aria-hidden="true" size={16} /><span>认证、额度和调用审计由平台统一处理</span></div>
@@ -603,6 +608,11 @@ function CallsPage() {
 function AccountPage() {
   const [cdk, setCdk] = useState<CDKSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [docsURL, setDocsURL] = useState(window.location.origin);
+
+  useEffect(() => {
+    void getDocsBaseURL().then(setDocsURL);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -634,8 +644,8 @@ function AccountPage() {
       <section className="surface">
         <SectionHeading title="服务与账单" detail="接入信息与额度概览。" />
         <div className="endpoint-row">
-          <code>POST {window.location.origin}/v1/captcha/solve</code>
-          <CopyButton compact label="复制地址" text={`${window.location.origin}/v1/captcha/solve`} />
+          <code>POST {docsURL}/v1/captcha/solve</code>
+          <CopyButton compact label="复制地址" text={`${docsURL}/v1/captcha/solve`} />
         </div>
         <div className="definition-list">
           <div><span>平台服务</span><b><StatusPill tone="success">运行正常</StatusPill></b></div>
@@ -661,12 +671,23 @@ const docsTabs: Array<{ id: DocsTab; label: string }> = [
 ];
 
 function DocsPage() {
-  const snippet = `curl -X POST ${window.location.origin}/v1/captcha/solve \\
+  const [snippet, setSnippet] = useState(`curl -X POST ${window.location.origin}/v1/captcha/solve \\
   -H "Authorization: Bearer cf_live_your_key" \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: your-unique-request-id" \\
-  -d '{"captcha_id":"captcha_id","risk_type":"slide"}'`;
+  -d '{"captcha_id":"captcha_id","risk_type":"slide"}'`);
   const [active, setActive] = useState<DocsTab>('quickstart');
+
+  // Snippets show the operator-configured display base URL when set.
+  useEffect(() => {
+    void getDocsBaseURL().then((base) => {
+      setSnippet(`curl -X POST ${base}/v1/captcha/solve \\
+  -H "Authorization: Bearer cf_live_your_key" \\
+  -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: your-unique-request-id" \\
+  -d '{"captcha_id":"captcha_id","risk_type":"slide"}'`);
+    });
+  }, []);
   // Switch panels instead of scrolling one long page; keep the scroll
   // position sane when the new panel is shorter.
   const select = (id: DocsTab) => {

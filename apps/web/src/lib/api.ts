@@ -106,6 +106,24 @@ export interface ActivationResult {
   user: { id: string; cdk_prefix: string };
 }
 
+/**
+ * Resolves the base URL shown in docs and snippets: the operator-configured
+ * display address when present, otherwise the current origin. The result is
+ * cached for the tab lifetime; the value is display-only.
+ */
+let docsBaseURL: string | null = null;
+export async function getDocsBaseURL(): Promise<string> {
+  if (docsBaseURL !== null) return docsBaseURL;
+  try {
+    const envelope = await meta();
+    const configured = envelope.data?.api_base_url?.trim();
+    docsBaseURL = configured ? configured : window.location.origin;
+  } catch {
+    docsBaseURL = window.location.origin;
+  }
+  return docsBaseURL;
+}
+
 // ---------- user session ----------
 
 export const api = {
@@ -156,6 +174,9 @@ export const api = {
     ),
 };
 
+// Public, unauthenticated display metadata (see /v1/meta).
+export const meta = () => request<PublicMeta>('/v1/meta');
+
 // ---------- admin ----------
 
 export interface AdminDashboard {
@@ -196,8 +217,12 @@ export interface AdminCdk {
 }
 
 export interface SystemConfig {
-  solver_base_url: string;
-  solver_source: 'default' | 'override';
+  api_base_url: string;
+  has_override: boolean;
+}
+
+export interface PublicMeta {
+  api_base_url: string;
 }
 
 export interface AdminUser {
@@ -258,8 +283,8 @@ export const adminApi = {
 
   getSystemConfig: () => request<SystemConfig>('/admin/v1/system/config'),
 
-  setSystemConfig: (input: { solver_base_url: string; reason: string }) =>
-    request<{ solver_base_url: string }>('/admin/v1/system/config', {
+  setSystemConfig: (input: { api_base_url: string; reason: string }) =>
+    request<{ api_base_url: string }>('/admin/v1/system/config', {
       method: 'PUT',
       body: JSON.stringify(input),
     }),

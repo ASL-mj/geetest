@@ -21,9 +21,8 @@ var webFS embed.FS
 
 // Server carries the shared dependencies for all handlers.
 type Server struct {
-	services      *service.Services
-	solve         *service.SolveService
-	solverGateway service.SolverOverrideSetter
+	services *service.Services
+	solve    *service.SolveService
 }
 
 // NewRouter builds the V1 route table. Go 1.22+ ServeMux patterns provide
@@ -31,13 +30,8 @@ type Server struct {
 // service; passing nil omits it (useful for focused test routers).
 // When a web build is embedded (deploy images), unmatched GETs fall back to
 // the SPA so history routes like /console/keys survive a hard refresh.
-// The optional gateway override receiver lets the system-config endpoint
-// hot-apply a new solver base URL in the running process.
-func NewRouter(services *service.Services, solve *service.SolveService, overrides ...service.SolverOverrideSetter) http.Handler {
+func NewRouter(services *service.Services, solve *service.SolveService) http.Handler {
 	server := &Server{services: services, solve: solve}
-	for _, override := range overrides {
-		server.solverGateway = override
-	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", server.handleHealthz)
@@ -74,6 +68,9 @@ func NewRouter(services *service.Services, solve *service.SolveService, override
 	mux.HandleFunc("PATCH /admin/v1/cdks/{cdk_id}/remark", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetCdkRemark))
 	mux.HandleFunc("GET /admin/v1/system/config", server.requireAdminAny(server.handleAdminGetSystemConfig))
 	mux.HandleFunc("PUT /admin/v1/system/config", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetSystemConfig))
+
+	// Anonymous metadata for the docs pages: the display base URL only.
+	mux.HandleFunc("GET /v1/meta", server.handlePublicMeta)
 
 	// Embedded web console (production image). Serving is skipped entirely
 	// when apps/api/web is empty, so local/test routers behave as before.

@@ -352,7 +352,7 @@ func (s *Server) handleAdminSetCdkRemark(w http.ResponseWriter, r *http.Request)
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"remark": strings.TrimSpace(payload.Remark)})
 }
 
-// handleAdminGetSystemConfig reports the effective runtime configuration.
+// handleAdminGetSystemConfig reports the display base URL configuration.
 func (s *Server) handleAdminGetSystemConfig(w http.ResponseWriter, r *http.Request) {
 	view, appErr := s.services.GetSystemConfig(r.Context())
 	if appErr != nil {
@@ -360,16 +360,17 @@ func (s *Server) handleAdminGetSystemConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{
-		"solver_base_url": view.SolverBaseURL,
-		"solver_source":   view.SolverSource,
+		"api_base_url": view.APIBaseURL,
+		"has_override": view.HasOverride,
 	})
 }
 
-// handleAdminSetSystemConfig stores, audits and live-applies an override.
+// handleAdminSetSystemConfig stores and audits the display base URL; the
+// underlying solver configuration is intentionally untouched.
 func (s *Server) handleAdminSetSystemConfig(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		SolverBaseURL string `json:"solver_base_url"`
-		Reason        string `json:"reason"`
+		APIBaseURL string `json:"api_base_url"`
+		Reason     string `json:"reason"`
 	}
 	if !decodeJSON(w, r, &payload) {
 		return
@@ -377,12 +378,12 @@ func (s *Server) handleAdminSetSystemConfig(w http.ResponseWriter, r *http.Reque
 	if !requireReason(w, payload.Reason) {
 		return
 	}
-	if appErr := s.services.SetSolverBaseURL(r.Context(), adminFromContext(r),
-		payload.SolverBaseURL, strings.TrimSpace(payload.Reason), s.solverGateway, s.auditIP(r)); appErr != nil {
+	if appErr := s.services.SetAPIBaseURL(r.Context(), adminFromContext(r),
+		payload.APIBaseURL, strings.TrimSpace(payload.Reason), s.auditIP(r)); appErr != nil {
 		writeApplicationError(w, appErr)
 		return
 	}
-	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"solver_base_url": strings.TrimSpace(payload.SolverBaseURL)})
+	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"api_base_url": strings.TrimSpace(payload.APIBaseURL)})
 }
 
 // handleAdminListUsers lists platform users.

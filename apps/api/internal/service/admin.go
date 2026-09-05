@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/captchaflow/service-platform/api/internal/config"
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
@@ -233,60 +232,68 @@ func (s *Services) SetCdkRemark(ctx context.Context, admin AdminSession, cdkID u
 }
 
 // SystemConfigView is the operator-facing runtime configuration snapshot.
+// APIBaseURL is display-only: it is what the docs pages show as the
+// platform endpoint; the underlying solver stays configured by the
+// environment and is never touched from here.
 type SystemConfigView struct {
-	SolverBaseURL string
-	SolverSource  string
+	APIBaseURL  string
+	HasOverride bool
 }
 
-// GetSystemConfig reports the effective solver base URL and where it comes
-// from (runtime override or environment default).
+// GetSystemConfig reports the configured display base URL, or empty when
+// the docs should fall back to the current origin.
 func (s *Services) GetSystemConfig(ctx context.Context) (SystemConfigView, *ApplicationError) {
-	override, err := store.GetSystemSetting(ctx, s.Pool, store.SettingSolverBaseURL)
+	override, err := store.GetSystemSetting(ctx, s.Pool, store.SettingAPIBaseURL)
 	if err == nil {
-		return SystemConfigView{SolverBaseURL: override, SolverSource: "override"}, nil
+		return SystemConfigView{APIBaseURL: override, HasOverride: true}, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		slog.Error("read system config failed", "error", err)
 		return SystemConfigView{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
-	return SystemConfigView{SolverBaseURL: s.Settings.GeetestSolverURL, SolverSource: "default"}, nil
+	return SystemConfigView{APIBaseURL: ""}, nil
 }
 
-// SolverOverrideSetter lets the transport apply a new solver URL to the
-// running gateway without a restart.
-type SolverOverrideSetter interface {
-	SetBaseURL(url string)
+// PublicMeta is the anonymous configuration snapshot rendered into docs.
+type PublicMeta struct {
+	APIBaseURL string
 }
 
-// SetSolverBaseURL stores, audits and live-applies the solver base URL.
-func (s *Services) SetSolverBaseURL(ctx context.Context, admin AdminSession, baseURL, reason string, gateway SolverOverrideSetter, ipMasked string) *ApplicationError {
+// GetPublicMeta resolves the display base URL for unauthenticated docs.
+func (s *Services) GetPublicMeta(ctx context.Context) (PublicMeta, *ApplicationError) {
+	view, appErr := s.GetSystemConfig(ctx)
+	if appErr != nil {
+		return PublicMeta{}, appErr
+	}
+	return PublicMeta{APIBaseURL: view.APIBaseURL}, nil
+}
+
+// SetAPIBaseURL stores and audits the display-only base URL used by the
+// documentation pages. An empty value clears the override.
+func (s *Services) SetAPIBaseURL(ctx context.Context, admin AdminSession, baseURL, reason string, ipMasked string) *ApplicationError {
 	if admin.Role != store.AdminRoleAdmin {
 		return ErrAdminForbidden()
 	}
 	baseURL = strings.TrimSpace(baseURL)
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
-		return NewError(422, "INVALID_REQUEST", "解析服务地址必须是 http(s) URL。")
-	}
-	if s.Settings.Environment == config.EnvProduction && (parsed.Host == "localhost" || strings.HasPrefix(parsed.Host, "127.")) {
-		return NewError(422, "INVALID_REQUEST", "生产环境不允许将解析服务指向本机地址。")
+	if baseURL != "" {
+		parsed, err := url.Parse(baseURL)
+		if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+			return NewError(422, "INVALID_REQUEST", "接入地址必须是 http(s) URL。")
+		}
 	}
 	if reason == "" {
 		return ErrInvalidRequest()
 	}
-	err = store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
-		if err := store.UpsertSystemSetting(ctx, q, store.SettingSolverBaseURL, baseURL); err != nil {
+	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
+		if err := store.UpsertSystemSetting(ctx, q, store.SettingAPIBaseURL, baseURL); err != nil {
 			return err
 		}
-		return recordAudit(ctx, q, admin, "system.solver_base_url_changed", "system", uuid.Nil,
-			nil, map[string]any{"solver_base_url": baseURL}, reason, ipMasked)
+		return recordAudit(ctx, q, admin, "system.api_base_url_changed", "system", uuid.Nil,
+			nil, map[string]any{"api_base_url": baseURL}, reason, ipMasked)
 	})
 	if err != nil {
-		slog.Error("save solver base url failed", "error", err)
+		slog.Error("save api base url failed", "error", err)
 		return NewError(500, "INTERNAL_ERROR", "Internal server error.")
-	}
-	if gateway != nil {
-		gateway.SetBaseURL(baseURL)
 	}
 	return nil
 }

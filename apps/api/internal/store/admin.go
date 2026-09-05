@@ -266,7 +266,7 @@ func GetCdkCiphertext(ctx context.Context, q Querier, cdkID uuid.UUID) ([]byte, 
 }
 
 // System settings: simple string overrides applied at runtime.
-const SettingSolverBaseURL = "solver_base_url"
+const SettingAPIBaseURL = "api_base_url"
 
 // GetSystemSetting returns one stored override (value_json holds a plain
 // JSON string), or ErrNotFound.
