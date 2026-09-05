@@ -48,16 +48,6 @@ func (s *Services) ActivateCDK(ctx context.Context, cdkCode string) (ActivationR
 		if cdk.Status == domain.CDKStatusDisabled {
 			return ErrCDKDisabled()
 		}
-		if cdk.ActivationDeadline != nil && !cdk.ActivationDeadline.After(now) {
-			return ErrCDKActivationExpiry()
-		}
-		if cdk.ExpiresAt != nil && !cdk.ExpiresAt.After(now) {
-			return ErrCDKExpired()
-		}
-		if cdk.QuotaRemaining <= 0 {
-			return ErrCDKExhausted()
-		}
-
 		if cdk.Status == domain.CDKStatusActive && cdk.BoundUserID != nil {
 			user, err := store.GetUser(ctx, q, *cdk.BoundUserID)
 			if err != nil {
@@ -82,6 +72,15 @@ func (s *Services) ActivateCDK(ctx context.Context, cdkCode string) (ActivationR
 
 		if cdk.Status != domain.CDKStatusUnactivated || cdk.BoundUserID != nil {
 			return ErrCDKUnavailable()
+		}
+		if cdk.ActivationDeadline != nil && !cdk.ActivationDeadline.After(now) {
+			return ErrCDKActivationExpiry()
+		}
+		if cdk.ExpiresAt != nil && !cdk.ExpiresAt.After(now) {
+			return ErrCDKExpired()
+		}
+		if cdk.QuotaRemaining <= 0 {
+			return ErrCDKExhausted()
 		}
 
 		user, err := store.CreateUser(ctx, q)

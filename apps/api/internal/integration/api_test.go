@@ -78,6 +78,53 @@ func TestActivateReEntryIssuesSessionWithoutNewKey(t *testing.T) {
 	}
 }
 
+func TestActivateReEntryStillWorksWhenQuotaIsExhausted(t *testing.T) {
+	h := newHarness(t)
+	_, code := h.seedCDK(nil)
+	first := h.activate(code)
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first activation must be 201, got %d", first.StatusCode)
+	}
+
+	var cdkID string
+	if err := h.services.Pool.QueryRow(context.Background(), `SELECT id FROM cdks WHERE code_prefix = $1`, code[:8]).Scan(&cdkID); err != nil {
+		t.Fatalf("find cdk: %v", err)
+	}
+	if _, err := h.services.Pool.Exec(context.Background(), `UPDATE cdks SET quota_remaining = 0 WHERE id = $1`, cdkID); err != nil {
+		t.Fatalf("exhaust cdk: %v", err)
+	}
+
+	status, payload := decodeEnvelope(t, h.activate(code))
+	if status != http.StatusOK {
+		t.Fatalf("bound user must still re-enter after quota exhaustion: %d %v", status, payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	if _, exists := data["default_api_key"]; exists {
+		t.Fatalf("re-entry must not issue a new default key: %v", data)
+	}
+}
+
+func TestActivateReEntryIgnoresPastActivationDeadline(t *testing.T) {
+	h := newHarness(t)
+	_, code := h.seedCDK(nil)
+	first := h.activate(code)
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first activation must be 201, got %d", first.StatusCode)
+	}
+	var cdkID string
+	if err := h.services.Pool.QueryRow(context.Background(), `SELECT id FROM cdks WHERE code_prefix = $1`, code[:8]).Scan(&cdkID); err != nil {
+		t.Fatalf("find cdk: %v", err)
+	}
+	if _, err := h.services.Pool.Exec(context.Background(), `UPDATE cdks SET activation_deadline = now() - interval '1 minute' WHERE id = $1`, cdkID); err != nil {
+		t.Fatalf("expire activation deadline: %v", err)
+	}
+
+	status, payload := decodeEnvelope(t, h.activate(code))
+	if status != http.StatusOK {
+		t.Fatalf("bound user must re-enter after activation deadline: %d %v", status, payload)
+	}
+}
+
 func TestActivateRejectsUnknownCDK(t *testing.T) {
 	h := newHarness(t)
 	resp := h.activate("UNKNOWN" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")))
