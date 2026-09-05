@@ -138,9 +138,11 @@ func ConfirmQuota(ctx context.Context, pool *pgxpool.Pool, cdkID, userID, apiCal
 	})
 }
 
-// RefundQuota moves one unit reserved -> remaining and appends REFUND.
-// Calling it twice for the same api_call_id fails on the ledger unique
-// constraint, enforcing exactly-once refunds.
+// RefundQuota appends one REFUND ledger entry and reverses whichever stage the
+// call reached: reserved -> remaining for ordinary solver failures, or used ->
+// remaining when crash recovery finds a confirmation without a terminal call
+// record. Calling it twice is harmless because the ledger entry is the
+// exactly-once guard.
 func RefundQuota(ctx context.Context, pool *pgxpool.Pool, cdkID, userID, apiCallID uuid.UUID, requestID, reason string) error {
 	return RunInTx(ctx, pool, func(ctx context.Context, q Querier) error {
 		// Exactly-once: check the ledger row BEFORE touching counters so a
@@ -151,6 +153,46 @@ func RefundQuota(ctx context.Context, pool *pgxpool.Pool, cdkID, userID, apiCall
 		}
 		if exists {
 			return nil
+		}
+
+		var confirmed bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM quota_ledger WHERE api_call_id = $1 AND entry_type = $2)`, apiCallID, EntryConfirm).Scan(&confirmed); err != nil {
+			return err
+		}
+		if confirmed {
+			// A process can crash after CONFIRM commits but before the call row
+			// reaches its terminal success state. Recovery turns that uncertain
+			// call into a refund, so reverse the confirmed unit rather than
+			// decrementing an unrelated outstanding reservation.
+			tag, err := q.Exec(ctx, `
+				UPDATE cdks
+				SET quota_used = quota_used - 1,
+				    quota_remaining = quota_remaining + 1,
+				    updated_at = now()
+				WHERE id = $1 AND quota_used > 0
+			`, cdkID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return ErrNotFound
+			}
+
+			after, err := readQuota(ctx, q, cdkID)
+			if err != nil {
+				return err
+			}
+			_, err = q.Exec(ctx, `
+				INSERT INTO quota_ledger (id, cdk_id, user_id, api_call_id, entry_type,
+				                          available_before, delta_available, available_after,
+				                          used_before, used_after, reserved_before, reserved_after,
+				                          reason, request_id, actor_type)
+				VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, $10, $10, $11, $12, 'system')
+			`, uuid.New(), cdkID, userID, apiCallID, EntryRefund,
+				after.Remaining-1, after.Remaining,
+				after.Used+1, after.Used, after.Reserved,
+				reason, requestID)
+			return err
 		}
 
 		tag, err := q.Exec(ctx, `
