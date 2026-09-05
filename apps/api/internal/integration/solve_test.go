@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -149,6 +150,13 @@ func TestSolveSuccessSettlesQuota(t *testing.T) {
 	}
 	if remaining != 99 || used != 1 || reserved != 0 {
 		t.Fatalf("quota counters wrong: remaining=%d used=%d reserved=%d", remaining, used, reserved)
+	}
+	var keyLastUsed *time.Time
+	if err := h.h.services.Pool.QueryRow(context.Background(), `SELECT last_used_at FROM api_keys WHERE total_calls = 1 LIMIT 1`).Scan(&keyLastUsed); err != nil {
+		t.Fatalf("api key last-used lookup: %v", err)
+	}
+	if keyLastUsed == nil {
+		t.Fatal("successful solve must update api key last_used_at")
 	}
 	if got := ledgerCount(t, h.h, "RESERVE"); got != 1 {
 		t.Fatalf("expected 1 RESERVE, got %d", got)

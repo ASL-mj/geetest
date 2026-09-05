@@ -116,7 +116,7 @@ func UpdateAPIKeyPolicy(ctx context.Context, q Querier, keyID uuid.UUID, name *s
 // unlimited (the UI documents 0 as 不限).
 func ConsumeAPIKeyQuota(ctx context.Context, q Querier, keyID uuid.UUID) (bool, error) {
 	tag, err := q.Exec(ctx, `
-		UPDATE api_keys SET total_calls = total_calls + 1
+		UPDATE api_keys SET total_calls = total_calls + 1, last_used_at = now()
 		WHERE id = $1 AND (quota_limit IS NULL OR quota_limit <= 0 OR total_calls < quota_limit)
 	`, keyID)
 	if err != nil {

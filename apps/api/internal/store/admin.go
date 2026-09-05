@@ -296,7 +296,7 @@ func UpsertSystemSetting(ctx context.Context, q Querier, key, value string) erro
 func SetCdkStatus(ctx context.Context, q Querier, cdkID uuid.UUID, status string) error {
 	tag, err := q.Exec(ctx, `
 		UPDATE cdks SET status = $2, updated_at = now()
-		WHERE id = $1 AND status IN ('UNACTIVATED', 'ACTIVE', 'DISABLED')
+		WHERE id = $1 AND status IN ('UNACTIVATED', 'ACTIVE', 'DISABLED', 'EXPIRED')
 	`, cdkID, status)
 	if err != nil {
 		return err
@@ -315,13 +315,13 @@ func AdjustCDKQuota(ctx context.Context, q Querier, cdkID uuid.UUID, delta int64
 		SET quota_total     = quota_total + $2,
 		    quota_remaining = quota_remaining + $2,
 		    updated_at      = now()
-		WHERE id = $1
+		WHERE id = $1 AND quota_total + $2 >= 0 AND quota_remaining + $2 >= 0
 	`, cdkID, delta)
 	if err != nil {
 		return QuotaSnapshot{}, err
 	}
 	if tag.RowsAffected() == 0 {
-		return QuotaSnapshot{}, ErrNotFound
+		return QuotaSnapshot{}, ErrQuotaAdjustmentInvalid
 	}
 	return readQuota(ctx, q, cdkID)
 }
@@ -433,14 +433,16 @@ func ListAdminAuditLogs(ctx context.Context, q Querier, limit int) ([]AdminAudit
 
 // DashboardCounters aggregates the operator landing metrics.
 type DashboardCounters struct {
-	UsersTotal       int64
-	UsersActive      int64
-	CdksActive       int64
-	CdksUnactivated  int64
-	CdksExhausted    int64
-	CallsToday       int64
-	CallsFailedToday int64
-	QuotaConsumed    int64
+	UsersTotal          int64
+	UsersActive         int64
+	CdksActive          int64
+	CdksUnactivated     int64
+	CdksExhausted       int64
+	CallsToday          int64
+	CallsRejectedToday  int64
+	CallsFailedToday    int64
+	CallsSucceededToday int64
+	QuotaConsumed       int64
 }
 
 // GetDashboardCounters reads the admin landing aggregates in one round trip.
@@ -454,9 +456,12 @@ func GetDashboardCounters(ctx context.Context, q Querier) (DashboardCounters, er
 			(SELECT count(*) FROM cdks WHERE status = 'UNACTIVATED'),
 			(SELECT count(*) FROM cdks WHERE status = 'ACTIVE' AND quota_remaining = 0),
 			(SELECT count(*) FROM api_calls WHERE accepted_at >= date_trunc('day', now() AT TIME ZONE 'utc')),
+			(SELECT count(*) FROM api_calls WHERE accepted_at >= date_trunc('day', now() AT TIME ZONE 'utc') AND status = 'REJECTED'),
 			(SELECT count(*) FROM api_calls WHERE accepted_at >= date_trunc('day', now() AT TIME ZONE 'utc') AND status = 'FAILED_REFUNDED'),
+			(SELECT count(*) FROM api_calls WHERE accepted_at >= date_trunc('day', now() AT TIME ZONE 'utc') AND status = 'SUCCEEDED'),
 			(SELECT COALESCE(sum(quota_used), 0) FROM cdks)
 	`).Scan(&counters.UsersTotal, &counters.UsersActive, &counters.CdksActive, &counters.CdksUnactivated,
-		&counters.CdksExhausted, &counters.CallsToday, &counters.CallsFailedToday, &counters.QuotaConsumed)
+		&counters.CdksExhausted, &counters.CallsToday, &counters.CallsRejectedToday, &counters.CallsFailedToday,
+		&counters.CallsSucceededToday, &counters.QuotaConsumed)
 	return counters, err
 }

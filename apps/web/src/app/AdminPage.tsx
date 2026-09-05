@@ -11,16 +11,20 @@ import {
   ServerCog,
   Settings,
   ShieldAlert,
+  Users,
+  Layers3,
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 
-import { adminApi, ApiError, type AdminAuditEntry, type AdminCdk, type AdminDashboard, type SystemConfig } from '../lib/api';
+import { adminApi, ApiError, type AdminAuditEntry, type AdminBatch, type AdminCdk, type AdminDashboard, type AdminUser, type SystemConfig } from '../lib/api';
 import { adminPath, navigate, useRoute, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
 
 const adminNavigation: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: '数据概览', icon: LayoutDashboard },
+  { id: 'batches', label: 'CDK 批次', icon: Layers3 },
   { id: 'cdks', label: 'CDK 管理', icon: KeyRound },
+  { id: 'users', label: '用户管理', icon: Users },
   { id: 'audit', label: '管理员审计', icon: FileText },
   { id: 'health', label: '服务状态', icon: ServerCog },
   { id: 'system', label: '系统配置', icon: Settings },
@@ -220,6 +224,50 @@ function CdksSection() {
       )}
     </section>
   );
+}
+
+function BatchesSection() {
+  const [batches, setBatches] = useState<AdminBatch[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    setError(null);
+    void adminApi.listBatches()
+      .then((envelope) => setBatches(envelope.data?.items ?? []))
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
+  };
+  useEffect(() => { load(); }, []);
+  if (error) return <AdminError message={error} onRetry={load} />;
+  return <section className="admin-panel">
+    <div className="admin-panel__heading"><div><h2>CDK 批次</h2><p>按批次查看发放规模、默认额度和激活情况。</p></div></div>
+    {batches === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+      : batches.length === 0 ? <div className="empty-state"><Layers3 aria-hidden="true" size={26} /><strong>暂无批次</strong></div>
+      : <div className="admin-table-wrap"><table><thead><tr><th>批次名称</th><th>默认额度</th><th>CDK 数量</th><th>已激活</th><th>创建时间</th></tr></thead><tbody>
+        {batches.map((batch) => <tr key={batch.id}><td><strong>{batch.name}</strong></td><td className="admin-mono">{formatCount(batch.default_quota)}</td><td className="admin-mono">{formatCount(batch.total_cdks)}</td><td className="admin-mono">{formatCount(batch.active_cdks)}</td><td>{formatTime(batch.created_at)}</td></tr>)}
+      </tbody></table></div>}
+  </section>;
+}
+
+function UsersSection() {
+  const [users, setUsers] = useState<AdminUser[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useState<AdminUser | null>(null);
+  const load = () => {
+    setError(null);
+    void adminApi.listUsers()
+      .then((envelope) => setUsers(envelope.data?.items ?? []))
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
+  };
+  useEffect(() => { load(); }, []);
+  if (error) return <AdminError message={error} onRetry={load} />;
+  return <section className="admin-panel">
+    <div className="admin-panel__heading"><div><h2>用户管理</h2><p>查看 CDK 绑定与剩余额度，封禁会立即撤销用户会话。</p></div></div>
+    {users === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+      : users.length === 0 ? <div className="empty-state"><Users aria-hidden="true" size={26} /><strong>暂无用户</strong></div>
+      : <div className="admin-table-wrap"><table><thead><tr><th>用户 ID</th><th>状态</th><th>绑定 CDK</th><th>CDK 状态</th><th>剩余额度</th><th aria-label="操作" /></tr></thead><tbody>
+        {users.map((user) => <tr key={user.id}><td><span className="admin-mono">{user.id.slice(0, 12)}…</span></td><td><AdminStatus tone={user.status === 'ACTIVE' ? 'success' : 'danger'}>{user.status === 'ACTIVE' ? '正常' : '已封禁'}</AdminStatus></td><td className="admin-mono">{user.cdk_prefix ?? '—'}</td><td>{user.cdk_status ?? '—'}</td><td className="admin-mono">{user.cdk_remaining == null ? '—' : formatCount(user.cdk_remaining)}</td><td className="admin-actions"><button className="admin-action admin-action--danger" onClick={() => setTarget(user)} type="button">{user.status === 'ACTIVE' ? '封禁' : '恢复'}</button></td></tr>)}
+      </tbody></table></div>}
+    {target && <ReasonDialog title={target.status === 'ACTIVE' ? '封禁用户' : '恢复用户'} description="操作会写入管理员审计日志。" confirmLabel={target.status === 'ACTIVE' ? '封禁' : '恢复'} onClose={() => setTarget(null)} onSubmit={(reason) => adminApi.setUserStatus(target.id, target.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE', reason).then(() => undefined)} onDone={() => { setTarget(null); load(); }} />}
+  </section>;
 }
 
 function SingleCdkDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (codes: string[]) => void }) {
@@ -607,7 +655,9 @@ export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSe
             <div><p className="public-eyebrow">OPERATIONS CONSOLE</p><h1>{current.label}</h1><p>统一管理 CDK、用户、调用审计与平台运行配置。</p></div>
           </div>
           {section === 'overview' && <OverviewSection />}
+          {section === 'batches' && <BatchesSection />}
           {section === 'cdks' && <CdksSection />}
+          {section === 'users' && <UsersSection />}
           {section === 'audit' && <AuditSection />}
           {section === 'health' && <HealthSection />}
           {section === 'system' && <SystemSection />}

@@ -1,12 +1,29 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func TestDecodeJSONRejectsTrailingValues(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ok":true}{"extra":true}`))
+	var payload map[string]any
+	if decodeJSON(rec, req, &payload) {
+		t.Fatal("decoder must reject trailing JSON values")
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", rec.Code)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("invalid error envelope: %v", err)
+	}
+}
 
 func TestSPAHandlerServesIndexForHistoryRoutes(t *testing.T) {
 	files := fstest.MapFS{

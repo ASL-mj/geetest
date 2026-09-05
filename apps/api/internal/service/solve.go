@@ -159,9 +159,11 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 	}
 	if err := store.ReserveAPICall(ctx, s.pool, callID); err != nil {
 		slog.Error("mark reserved failed", "request_id", requestID, "error", err)
+		return s.settleAdmissionFailure(record)
 	}
 	if err := store.DispatchAPICall(ctx, s.pool, callID); err != nil {
 		slog.Error("mark dispatched failed", "request_id", requestID, "error", err)
+		return s.settleAdmissionFailure(record)
 	}
 
 	// Solver call strictly outside DB transactions.
@@ -197,10 +199,30 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 		slog.Error("complete success failed", "request_id", requestID, "error", err)
 	}
 
-	if err := store.SaveIdempotencyResponse(ctx, s.pool, callID, caller.UserID, responseJSON); err != nil {
+	if err := store.SaveIdempotencyResponse(settleCtx, s.pool, callID, caller.UserID, responseJSON); err != nil {
 		slog.Error("save idempotency response failed", "request_id", requestID, "error", err)
 	}
 	return SolveOutcome{RequestID: requestID, Result: result}
+}
+
+// settleAdmissionFailure handles a database state-transition failure after
+// quota reservation. The solver must not be called in this branch; both the
+// per-key admission counter and CDK reservation are released before the call
+// is finalized as an internal error.
+func (s *SolveService) settleAdmissionFailure(record store.APICall) SolveOutcome {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := store.ReleaseAPIKeyQuota(ctx, s.pool, record.APIKeyID); err != nil {
+		slog.Error("release key quota after admission failure", "request_id", record.RequestID, "error", err)
+	}
+	refunded := store.RefundQuota(ctx, s.pool, record.CDKID, record.UserID, record.ID, record.RequestID, "admission transition failure") == nil
+	if !refunded {
+		slog.Error("refund quota after admission failure", "request_id", record.RequestID)
+	}
+	if err := store.CompleteAPICallFailure(ctx, s.pool, record.ID, 500, "INTERNAL_ERROR", "Internal server error.", refunded, 0); err != nil {
+		slog.Error("complete admission failure", "request_id", record.RequestID, "error", err)
+	}
+	return SolveOutcome{RequestID: record.RequestID, SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error."}}
 }
 
 // replayOutcome serves stored terminal responses (spec §7.3.2) or flags a

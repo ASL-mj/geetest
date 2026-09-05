@@ -157,6 +157,12 @@ func TestAdminBatchCreationAndQuotaAdjustmentAreAudited(t *testing.T) {
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("missing reason must 422, got %d", status)
 	}
+	// A negative adjustment may not consume more than the available quota.
+	status, payload = decodeEnvelope(t, base.do("POST", fmt.Sprintf("/admin/v1/cdks/%s/quota-adjustments", cdkID), `{"delta": -1000, "reason": "invalid correction"}`, admin))
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("oversized negative adjustment must 422, got %d: %v", status, payload)
+	}
+	expectError(t, payload, "QUOTA_ADJUSTMENT_INVALID")
 
 	// The adjustment produced both a ledger row and an audit entry.
 	var entryType string

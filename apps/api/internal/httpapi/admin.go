@@ -138,15 +138,17 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{
-		"users_total":        dashboard.UsersTotal,
-		"users_active":       dashboard.UsersActive,
-		"cdks_active":        dashboard.CdksActive,
-		"cdks_unactivated":   dashboard.CdksUnactivated,
-		"cdks_exhausted":     dashboard.CdksExhausted,
-		"calls_today":        dashboard.CallsToday,
-		"calls_failed_today": dashboard.CallsFailedToday,
-		"quota_consumed":     dashboard.QuotaConsumed,
-		"success_rate":       dashboard.SuccessRate,
+		"users_total":           dashboard.UsersTotal,
+		"users_active":          dashboard.UsersActive,
+		"cdks_active":           dashboard.CdksActive,
+		"cdks_unactivated":      dashboard.CdksUnactivated,
+		"cdks_exhausted":        dashboard.CdksExhausted,
+		"calls_today":           dashboard.CallsToday,
+		"calls_rejected_today":  dashboard.CallsRejectedToday,
+		"calls_failed_today":    dashboard.CallsFailedToday,
+		"calls_succeeded_today": dashboard.CallsSucceededToday,
+		"quota_consumed":        dashboard.QuotaConsumed,
+		"success_rate":          dashboard.SuccessRate,
 	})
 }
 

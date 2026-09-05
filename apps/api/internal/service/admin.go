@@ -330,10 +330,16 @@ func (s *Services) AdjustCdkQuota(ctx context.Context, admin AdminSession, cdkID
 			}
 			return err
 		}
+		if request.Delta < 0 && -request.Delta > before.Remaining {
+			return NewError(422, "QUOTA_ADJUSTMENT_INVALID", "扣减额度不能超过当前剩余额度。")
+		}
 		snapshot, err = store.AdjustCDKQuota(ctx, q, cdkID, request.Delta)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrCDKNotFound()
+			}
+			if errors.Is(err, store.ErrQuotaAdjustmentInvalid) {
+				return NewError(422, "QUOTA_ADJUSTMENT_INVALID", "扣减额度不能超过当前剩余额度。")
 			}
 			return err
 		}
@@ -372,8 +378,10 @@ func (s *Services) SetCdkEnabled(ctx context.Context, admin AdminSession, cdkID 
 	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
 		var previousStatus string
 		var remaining int64
-		err := q.QueryRow(ctx, `SELECT status, quota_remaining FROM cdks WHERE id = $1`, cdkID).
-			Scan(&previousStatus, &remaining)
+		var boundUserID *uuid.UUID
+		var expiresAt *time.Time
+		err := q.QueryRow(ctx, `SELECT status, quota_remaining, bound_user_id, expires_at FROM cdks WHERE id = $1`, cdkID).
+			Scan(&previousStatus, &remaining, &boundUserID, &expiresAt)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
 				return ErrCDKNotFound()
@@ -382,6 +390,16 @@ func (s *Services) SetCdkEnabled(ctx context.Context, admin AdminSession, cdkID 
 		}
 		before, _ = json.Marshal(map[string]any{"status": previousStatus, "quota_remaining": remaining})
 
+		if enable {
+			// A disabled unbound CDK is still available for first activation;
+			// restoring it to ACTIVE would make activation impossible because
+			// the activation path only accepts UNACTIVATED.
+			if boundUserID == nil {
+				status = "UNACTIVATED"
+			} else if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
+				status = "EXPIRED"
+			}
+		}
 		if err := store.SetCdkStatus(ctx, q, cdkID, status); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrCDKNotFound()
@@ -389,7 +407,7 @@ func (s *Services) SetCdkEnabled(ctx context.Context, admin AdminSession, cdkID 
 			return err
 		}
 		return recordAudit(ctx, q, admin, "cdk.status_changed", "cdk", cdkID,
-			json.RawMessage(before), map[string]any{"status": status}, reason, ipMasked)
+			json.RawMessage(before), map[string]any{"status": status, "quota_remaining": remaining}, reason, ipMasked)
 	})
 	if err != nil {
 		if appErr, ok := AsApplicationError(err); ok {
@@ -456,8 +474,9 @@ func (s *Services) GetAdminDashboard(ctx context.Context) (AdminDashboard, *Appl
 		return AdminDashboard{}, NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	var successRate float64
-	if counters.CallsToday > 0 {
-		successRate = float64(counters.CallsToday-counters.CallsFailedToday) / float64(counters.CallsToday)
+	settledToday := counters.CallsToday - counters.CallsRejectedToday
+	if settledToday > 0 {
+		successRate = float64(settledToday-counters.CallsFailedToday) / float64(settledToday)
 	}
 	return AdminDashboard{DashboardCounters: counters, SuccessRate: successRate}, nil
 }
@@ -498,7 +517,7 @@ func readQuotaForAdmin(ctx context.Context, q store.Querier, cdkID uuid.UUID) (a
 	var snapshot adminCdkSnapshot
 	err := q.QueryRow(ctx, `
 		SELECT quota_remaining, quota_used, quota_reserved, quota_total, bound_user_id
-		FROM cdks WHERE id = $1
+		FROM cdks WHERE id = $1 FOR UPDATE
 	`, cdkID).Scan(&snapshot.Remaining, &snapshot.Used, &snapshot.Reserved, &snapshot.Total, &snapshot.BoundUserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -198,7 +198,9 @@ export interface AdminDashboard {
   cdks_unactivated: number;
   cdks_exhausted: number;
   calls_today: number;
+  calls_rejected_today: number;
   calls_failed_today: number;
+  calls_succeeded_today: number;
   quota_consumed: number;
   success_rate: number;
 }

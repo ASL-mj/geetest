@@ -5,6 +5,7 @@ package httpapi
 import (
 	"embed"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -192,6 +193,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(target); err != nil {
+		writeApplicationError(w, service.ErrInvalidRequest())
+		return false
+	}
+	// A request must contain exactly one JSON value. Without this second
+	// decode, a body such as `{...}{...}` would be silently accepted.
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		writeApplicationError(w, service.ErrInvalidRequest())
 		return false
 	}
