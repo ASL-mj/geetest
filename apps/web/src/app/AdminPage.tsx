@@ -17,7 +17,7 @@ import {
 import { type ReactNode, useEffect, useState } from 'react';
 
 import { adminApi, ApiError, type AdminAuditEntry, type AdminBatch, type AdminCdk, type AdminDashboard, type AdminUser, type SystemConfig } from '../lib/api';
-import { adminPath, navigate, useRoute, type AdminSection } from '../lib/router';
+import { adminPath, navigate, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
 
 const adminNavigation: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
@@ -594,10 +594,9 @@ function AdminLoginGate({ onAuthenticated }: { onAuthenticated: () => void }) {
 }
 
 export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSection; onExit: () => void }) {
-  // Section lives in the URL (/admin/overview, /admin/cdks, …) so refresh
-  // and deep links land on the same management view.
-  const route = useRoute();
-  const section: AdminSection = route.name === 'admin' ? route.section : (initialSection ?? 'overview');
+  // App owns the history router; keeping a second route state here would
+  // leave the URL and visible section out of sync after sidebar navigation.
+  const section: AdminSection = initialSection ?? 'overview';
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const current = adminNavigation.find((item) => item.id === section) ?? adminNavigation[0];
