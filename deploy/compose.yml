@@ -34,6 +34,12 @@ services:
       context: ..
       dockerfile: apps/api/Dockerfile
     env_file: ../.env
+    environment:
+      # The repository .env is also used for host-based `go run`, where these
+      # addresses point at localhost. Inside Compose, API dependencies are
+      # reached through their service DNS names instead.
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/geetest_platform?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
