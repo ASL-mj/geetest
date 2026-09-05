@@ -47,6 +47,7 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", server.handleHealthz)
+	mux.HandleFunc("GET /openapi.json", handleOpenAPI)
 	mux.HandleFunc("POST /v1/auth/activate", server.requireThrottle(server.activateGate, server.handleActivate))
 	mux.HandleFunc("POST /v1/auth/logout", server.requireUserSession(server.handleLogout))
 	mux.HandleFunc("POST /v1/keys", server.requireUserSession(server.handleCreateKey))
@@ -136,7 +137,7 @@ func spaHandlerFor(files fs.FS) http.HandlerFunc {
 // surface (which must never fall back to the web console). /admin itself is
 // an SPA route; only the /admin/v1 API namespace is excluded.
 func isAPIPath(p string) bool {
-	return p == "/healthz" || p == "/v1" || p == "/admin/v1" ||
+	return p == "/healthz" || p == "/openapi.json" || p == "/v1" || p == "/admin/v1" ||
 		strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/admin/v1/")
 }
 

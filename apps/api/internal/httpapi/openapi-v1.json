@@ -1,0 +1,157 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "CaptchaFlow Service Platform API",
+    "version": "v1",
+    "description": "Public API contract for CaptchaFlow. The platform manages CDK entitlement, API keys, quotas, idempotency and audit records."
+  },
+  "servers": [{ "url": "https://api.example.invalid", "description": "Replace with the platform address shown in the console." }],
+  "tags": [
+    { "name": "Platform", "description": "Public metadata and service health." },
+    { "name": "Identity", "description": "CDK-backed browser identity." },
+    { "name": "API Keys", "description": "Browser-session API Key lifecycle." },
+    { "name": "Usage", "description": "Browser-session account and call history." },
+    { "name": "Captcha", "description": "Bearer-key captcha processing." }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": ["Platform"], "summary": "Platform liveness", "operationId": "getHealth",
+        "responses": { "200": { "description": "Platform process is healthy", "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "const": "ok" } } } } } } }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["Platform"], "summary": "OpenAPI contract", "operationId": "getOpenAPI",
+        "responses": { "200": { "description": "This versioned OpenAPI document", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/v1/meta": {
+      "get": {
+        "tags": ["Platform"], "summary": "Public display metadata", "operationId": "getMeta",
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "500": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/auth/activate": {
+      "post": {
+        "tags": ["Identity"], "summary": "Activate or re-enter with a CDK", "operationId": "activateCDK",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActivateRequest" } } } },
+        "responses": {
+          "200": { "description": "Existing CDK re-entry; a new user session is issued.", "headers": { "Set-Cookie": { "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActivationEnvelope" } } } },
+          "201": { "description": "First activation. The default API Key plaintext appears once in data.default_api_key.", "headers": { "Set-Cookie": { "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActivationEnvelope" } } } },
+          "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": ["Identity"], "summary": "End the current user session", "operationId": "logout",
+        "security": [{ "userSession": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/account": {
+      "get": {
+        "tags": ["Usage"], "summary": "Get CDK entitlement summary", "operationId": "getAccount",
+        "security": [{ "userSession": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": ["Usage"], "summary": "Get quota and call aggregates", "operationId": "getUsage",
+        "security": [{ "userSession": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/keys": {
+      "get": {
+        "tags": ["API Keys"], "summary": "List owned API Keys", "operationId": "listKeys", "security": [{ "userSession": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" } }
+      },
+      "post": {
+        "tags": ["API Keys"], "summary": "Create an API Key", "operationId": "createKey", "security": [{ "userSession": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 } } } } } },
+        "responses": { "201": { "description": "Created Key. data.secret is shown only in this response.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/KeyEnvelope" } } } }, "401": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/keys/{key_id}": {
+      "parameters": [{ "$ref": "#/components/parameters/KeyID" }],
+      "patch": {
+        "tags": ["API Keys"], "summary": "Update an owned API Key", "operationId": "updateKey", "security": [{ "userSession": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateKeyRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      },
+      "delete": {
+        "tags": ["API Keys"], "summary": "Soft-delete an owned API Key", "operationId": "deleteKey", "security": [{ "userSession": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/calls": {
+      "get": {
+        "tags": ["Usage"], "summary": "List the caller's redacted call records", "operationId": "listCalls", "security": [{ "userSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/calls/{request_id}": {
+      "get": {
+        "tags": ["Usage"], "summary": "Get one owned redacted call record", "operationId": "getCall", "security": [{ "userSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/RequestID" }],
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/captcha/solve": {
+      "post": {
+        "tags": ["Captcha"], "summary": "Process one captcha request", "operationId": "solveCaptcha",
+        "description": "The platform validates the Key, CDK entitlement, quota, rate and concurrency before invoking its server-side processing dependency. A repeated Idempotency-Key returns the original result without charging again.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptchaSolveRequest" } } } },
+        "responses": {
+          "200": { "description": "Solved or idempotently replayed result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SolveEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Error" }, "402": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/RateLimited" }, "502": { "$ref": "#/components/responses/Error" }, "504": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/tools/captcha/solve": {
+      "post": {
+        "tags": ["Captcha"], "summary": "Console-only captcha test", "operationId": "consoleSolve",
+        "description": "Used by the built-in console. It authenticates the selected owned Key server-side and never accepts a Key plaintext from the browser.",
+        "security": [{ "userSession": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["key_id", "captcha_id"], "properties": { "key_id": { "type": "string", "format": "uuid" }, "captcha_id": { "type": "string", "maxLength": 256 } } } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Success" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/RateLimited" }, "502": { "$ref": "#/components/responses/Error" }, "504": { "$ref": "#/components/responses/Error" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "cf_live_ API Key" },
+      "userSession": { "type": "apiKey", "in": "cookie", "name": "session", "description": "HttpOnly browser session issued by CDK activation." }
+    },
+    "parameters": {
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "description": "Unique caller-generated key, maximum 256 characters.", "schema": { "type": "string", "minLength": 1, "maxLength": 256 } },
+      "KeyID": { "name": "key_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "RequestID": { "name": "request_id", "in": "path", "required": true, "schema": { "type": "string", "maxLength": 64 } },
+      "Cursor": { "name": "cursor", "in": "query", "required": false, "description": "Opaque pagination cursor from the previous response.", "schema": { "type": "string" } },
+      "Limit": { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "default": 20 } }
+    },
+    "responses": {
+      "Success": { "description": "Standard successful platform envelope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } },
+      "Error": { "description": "Standard error envelope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "RateLimited": { "description": "Rate or concurrency admission was rejected", "headers": { "Retry-After": { "description": "Seconds until a retry may be attempted.", "schema": { "type": "integer", "minimum": 1 } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+    },
+    "schemas": {
+      "SuccessEnvelope": { "type": "object", "required": ["success", "request_id", "data"], "properties": { "success": { "const": true }, "request_id": { "type": "string", "pattern": "^req_" }, "data": { "type": "object" } } },
+      "ErrorEnvelope": { "type": "object", "required": ["success", "request_id", "error"], "properties": { "success": { "const": false }, "request_id": { "type": "string", "pattern": "^req_" }, "error": { "$ref": "#/components/schemas/Error" } } },
+      "Error": { "type": "object", "required": ["code", "message", "retryable"], "properties": { "code": { "type": "string" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+      "ActivateRequest": { "type": "object", "required": ["cdk"], "properties": { "cdk": { "type": "string", "minLength": 4, "maxLength": 128 } } },
+      "ActivationEnvelope": { "type": "object", "required": ["success", "request_id", "data"], "properties": { "success": { "const": true }, "request_id": { "type": "string" }, "data": { "type": "object", "required": ["user"], "properties": { "user": { "type": "object", "required": ["id", "cdk_prefix"], "properties": { "id": { "type": "string", "format": "uuid" }, "cdk_prefix": { "type": "string" } } }, "default_api_key": { "type": "string", "description": "First activation only; retain it immediately because later responses never include it." } } } } },
+      "CaptchaSolveRequest": { "type": "object", "required": ["captcha_id", "risk_type"], "properties": { "captcha_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "risk_type": { "const": "slide" } } },
+      "SolveEnvelope": { "type": "object", "required": ["success", "request_id", "data"], "properties": { "success": { "const": true }, "request_id": { "type": "string" }, "data": { "type": "object", "required": ["captcha_id", "lot_number", "captcha_output", "pass_token", "gen_time"], "properties": { "captcha_id": { "type": "string" }, "lot_number": { "type": "string" }, "captcha_output": { "type": "string" }, "pass_token": { "type": "string" }, "gen_time": { "type": "string" } } } } },
+      "KeyEnvelope": { "type": "object", "required": ["success", "request_id", "data"], "properties": { "success": { "const": true }, "request_id": { "type": "string" }, "data": { "$ref": "#/components/schemas/APIKey" } } },
+      "APIKey": { "type": "object", "required": ["id", "name", "prefix", "last4", "status", "total_calls", "created_at"], "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "prefix": { "type": "string" }, "last4": { "type": "string" }, "status": { "enum": ["ACTIVE", "DISABLED", "DELETED"] }, "quota_limit": { "type": ["integer", "null"], "minimum": 0 }, "allowed_ips": { "type": ["string", "null"] }, "total_calls": { "type": "integer", "minimum": 0 }, "last_used_at": { "type": ["string", "null"], "format": "date-time" }, "created_at": { "type": "string", "format": "date-time" }, "secret": { "type": "string", "description": "Creation response only." } } },
+      "UpdateKeyRequest": { "type": "object", "minProperties": 1, "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "enum": ["ACTIVE", "DISABLED"] }, "quota_limit": { "type": "integer", "minimum": 0 }, "allowed_ips": { "type": "string" } } }
+    }
+  }
+}
