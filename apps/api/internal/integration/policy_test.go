@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/captchaflow/service-platform/api/internal/domain"
 	"github.com/captchaflow/service-platform/api/internal/solver"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
@@ -92,6 +95,63 @@ func TestAPIKeyPolicyRestrictsCalls(t *testing.T) {
 	resp = h.do("GET", "/v1/keys/"+keyID+"/secret", "", session)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("historical secret endpoint must be unavailable: %d", resp.StatusCode)
+	}
+}
+
+// TestAdmissionGatesRejectLateEntitlementDisable simulates the gap between
+// authentication and admission. Disabling any entitlement during that gap
+// must keep the solve from reserving quota or reaching the gateway.
+func TestAdmissionGatesRejectLateEntitlementDisable(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := activateWithSession(t, h)
+	caller, appErr := h.services.AuthenticateAPIKey(context.Background(), secret)
+	if appErr != nil {
+		t.Fatalf("authenticate seeded key: %v", appErr)
+	}
+
+	keyStatus := domain.APIKeyStatusDisabled
+	if err := store.UpdateAPIKeyFields(context.Background(), h.services.Pool, caller.APIKeyID, nil, &keyStatus, nil); err != nil {
+		t.Fatalf("disable key: %v", err)
+	}
+	admitted, err := store.ConsumeAPIKeyQuota(context.Background(), h.services.Pool, caller.APIKeyID)
+	if err != nil {
+		t.Fatalf("consume disabled key: %v", err)
+	}
+	if admitted {
+		t.Fatal("disabled API key must not pass the atomic admission gate")
+	}
+
+	keyStatus = domain.APIKeyStatusActive
+	if err := store.UpdateAPIKeyFields(context.Background(), h.services.Pool, caller.APIKeyID, nil, &keyStatus, nil); err != nil {
+		t.Fatalf("restore key: %v", err)
+	}
+	if err := store.SetUserStatus(context.Background(), h.services.Pool, caller.UserID, "DISABLED"); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	admitted, err = store.ConsumeAPIKeyQuota(context.Background(), h.services.Pool, caller.APIKeyID)
+	if err != nil {
+		t.Fatalf("consume disabled user's key: %v", err)
+	}
+	if admitted {
+		t.Fatal("disabled user must not pass the atomic key admission gate")
+	}
+
+	if err := store.SetUserStatus(context.Background(), h.services.Pool, caller.UserID, string(domain.UserStatusActive)); err != nil {
+		t.Fatalf("restore user: %v", err)
+	}
+	if err := store.SetCdkStatus(context.Background(), h.services.Pool, caller.CDKID, string(domain.CDKStatusDisabled)); err != nil {
+		t.Fatalf("disable cdk: %v", err)
+	}
+	if err := store.ReserveQuota(context.Background(), h.services.Pool, caller.CDKID, caller.UserID, uuid.New(), "late-disable", "late entitlement disable"); err == nil {
+		t.Fatal("disabled CDK must not reserve quota after authentication")
+	}
+
+	summary, err := store.GetCDKSummaryForUser(context.Background(), h.services.Pool, caller.UserID)
+	if err != nil {
+		t.Fatalf("read quota summary: %v", err)
+	}
+	if summary.QuotaRemaining != 100 || summary.QuotaReserved != 0 || summary.QuotaUsed != 0 {
+		t.Fatalf("late entitlement disable must leave quota unchanged: %+v", summary)
 	}
 }
 

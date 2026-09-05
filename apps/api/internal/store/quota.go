@@ -54,17 +54,27 @@ func InsertQuotaLedgerEntry(ctx context.Context, q Querier, cdkID uuid.UUID, use
 }
 
 // ReserveQuota atomically moves one unit remaining -> reserved and appends a
-// RESERVE ledger row in the same transaction. The conditional UPDATE is the
-// admission gate: zero rows affected means QUOTA_EXHAUSTED.
+// RESERVE ledger row in the same transaction. Entitlement predicates are
+// repeated here so an operator revocation or expiry that lands after bearer
+// authentication cannot admit a solve. Zero rows affected means the caller is
+// no longer eligible for quota admission.
 func ReserveQuota(ctx context.Context, pool *pgxpool.Pool, cdkID, userID, apiCallID uuid.UUID, requestID, reason string) error {
 	return RunInTx(ctx, pool, func(ctx context.Context, q Querier) error {
 		tag, err := q.Exec(ctx, `
-			UPDATE cdks
-			SET quota_remaining = quota_remaining - 1,
-			    quota_reserved  = quota_reserved + 1,
+			UPDATE cdks AS c
+			SET quota_remaining = c.quota_remaining - 1,
+			    quota_reserved  = c.quota_reserved + 1,
 			    updated_at      = now()
-			WHERE id = $1 AND quota_remaining > 0
-		`, cdkID)
+			WHERE c.id = $1
+			  AND c.bound_user_id = $2
+			  AND c.status = 'ACTIVE'
+			  AND (c.expires_at IS NULL OR c.expires_at > now())
+			  AND c.quota_remaining > 0
+			  AND EXISTS (
+				  SELECT 1 FROM users AS u
+				  WHERE u.id = $2 AND u.status = 'ACTIVE'
+			  )
+		`, cdkID, userID)
 		if err != nil {
 			return err
 		}

@@ -110,14 +110,22 @@ func UpdateAPIKeyPolicy(ctx context.Context, q Querier, keyID uuid.UUID, name *s
 	return err
 }
 
-// ConsumeAPIKeyQuota is the atomic admission gate for per-key ceilings:
-// one conditional UPDATE admits the call or refuses it, so concurrent
-// solves cannot overshoot the limit. A NULL/negative-or-zero limit is
-// unlimited (the UI documents 0 as 不限).
+// ConsumeAPIKeyQuota is the atomic admission gate for per-key ceilings and
+// current key/user eligibility. A request can authenticate just before an
+// operator disables its key or user, so this UPDATE repeats those predicates
+// at the mutation boundary. A NULL/negative-or-zero limit is unlimited (the
+// UI documents 0 as 不限).
 func ConsumeAPIKeyQuota(ctx context.Context, q Querier, keyID uuid.UUID) (bool, error) {
 	tag, err := q.Exec(ctx, `
-		UPDATE api_keys SET total_calls = total_calls + 1, last_used_at = now()
-		WHERE id = $1 AND (quota_limit IS NULL OR quota_limit <= 0 OR total_calls < quota_limit)
+		UPDATE api_keys AS k
+		SET total_calls = k.total_calls + 1, last_used_at = now()
+		WHERE k.id = $1
+		  AND k.status = 'ACTIVE'
+		  AND EXISTS (
+			  SELECT 1 FROM users AS u
+			  WHERE u.id = k.user_id AND u.status = 'ACTIVE'
+		  )
+		  AND (k.quota_limit IS NULL OR k.quota_limit <= 0 OR k.total_calls < k.quota_limit)
 	`, keyID)
 	if err != nil {
 		return false, err
