@@ -8,6 +8,7 @@ The underlying solver is an internal dependency. This repository must not modify
 
 - [V1 product and architecture specification](docs/specs/2026-09-04-geetest-service-platform-v1-design.md)
 - [V1 implementation plan](docs/plans/2026-09-04-geetest-service-platform-v1-implementation.md)
+- [Production deployment guide](docs/deployment.md)
 
 ## Delivery Baseline
 
