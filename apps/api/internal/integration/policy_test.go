@@ -28,8 +28,7 @@ func activateWithSession(t *testing.T, h *harness) (string, *http.Cookie) {
 	return secret, sessionCookie(t, resp)
 }
 
-// TestAPIKeyPolicyRestrictsCalls covers per-key quota, IP allowlists and
-// plaintext re-display end to end.
+// TestAPIKeyPolicyRestrictsCalls covers per-key quota and IP allowlists.
 func TestAPIKeyPolicyRestrictsCalls(t *testing.T) {
 	sh := newSolveHarness(t, func(ctx context.Context, requestID string, req solver.SolveRequest) (*solver.SolveResult, error) {
 		return okResult(req), nil
@@ -88,15 +87,11 @@ func TestAPIKeyPolicyRestrictsCalls(t *testing.T) {
 	status, payload = decodeEnvelope(t, second)
 	expectError(t, payload, "KEY_QUOTA_EXHAUSTED")
 
-	// Plaintext re-display returns the exact original secret.
+	// Historical plaintext cannot be recovered through the API. The original
+	// secret is intentionally retained only in this test for authenticated calls.
 	resp = h.do("GET", "/v1/keys/"+keyID+"/secret", "", session)
-	status, payload = decodeEnvelope(t, resp)
-	if status != http.StatusOK {
-		t.Fatalf("reveal secret failed: %d %v", status, payload)
-	}
-	data, _ = payload["data"].(map[string]any)
-	if data["secret"] != originalSecret {
-		t.Fatalf("revealed secret mismatch: %v", data["secret"])
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("historical secret endpoint must be unavailable: %d", resp.StatusCode)
 	}
 }
 

@@ -68,3 +68,19 @@ func TestAPIKeyHashUnique(t *testing.T) {
 		t.Fatal("duplicate key hash must violate the unique constraint")
 	}
 }
+
+func TestAPIKeysStoreNoRecoverableSecretColumn(t *testing.T) {
+	h := newHarness(t)
+	var exists bool
+	if err := h.services.Pool.QueryRow(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'api_keys' AND column_name = 'secret_ciphertext'
+		)
+	`).Scan(&exists); err != nil {
+		t.Fatalf("inspect api_keys columns: %v", err)
+	}
+	if exists {
+		t.Fatal("api_keys must not retain a recoverable secret column")
+	}
+}

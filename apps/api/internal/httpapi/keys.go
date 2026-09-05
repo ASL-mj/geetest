@@ -156,22 +156,6 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, newRequestID(), http.StatusOK, serializeAPIKey(updated))
 }
 
-// handleRevealKeySecret decrypts the stored ciphertext for the owning
-// session so the console can copy an existing key again.
-func (s *Server) handleRevealKeySecret(w http.ResponseWriter, r *http.Request) {
-	keyID := parseUUID(r.PathValue("key_id"))
-	if keyID == nil {
-		writeApplicationError(w, service.ErrInvalidRequest())
-		return
-	}
-	secret, appErr := s.services.RevealAPIKeySecret(r.Context(), *parseUUID(userFromContext(r).UserID), *keyID)
-	if appErr != nil {
-		writeApplicationError(w, appErr)
-		return
-	}
-	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{"secret": secret})
-}
-
 // handleDeleteKey soft-deletes a key into the DELETED terminal state.
 func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	keyID := parseUUID(r.PathValue("key_id"))

@@ -19,9 +19,8 @@ type CreatedAPIKey struct {
 	Secret string
 }
 
-// CreateAPIKey generates a cf_live_ secret, persists its peppered HMAC hash
-// for authentication plus an AES-GCM ciphertext so the owner can re-copy the
-// plaintext from the console.
+// CreateAPIKey generates a cf_live_ secret and persists only its peppered HMAC
+// hash. The plaintext is returned to the caller once and is never recoverable.
 func (s *Services) CreateAPIKey(ctx context.Context, userID uuid.UUID, name string) (CreatedAPIKey, *ApplicationError) {
 	var created CreatedAPIKey
 	err := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
@@ -56,42 +55,19 @@ func (s *Services) createAPIKeySecret(ctx context.Context, q store.Querier, user
 		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	full := "cf_live_" + secret
-	sealed, err := crypto.Seal(s.Settings.SessionSecret, full)
-	if err != nil {
-		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
-	}
 	record := domain.APIKey{
-		ID:               uuid.New(),
-		UserID:           userID,
-		Name:             name,
-		KeyPrefix:        full[:16],
-		KeyLast4:         full[len(full)-4:],
-		KeyHash:          crypto.HMACSHA256(full, s.Settings.APIKeyPepper),
-		SecretCiphertext: sealed,
-		Status:           domain.APIKeyStatusActive,
+		ID:        uuid.New(),
+		UserID:    userID,
+		Name:      name,
+		KeyPrefix: full[:16],
+		KeyLast4:  full[len(full)-4:],
+		KeyHash:   crypto.HMACSHA256(full, s.Settings.APIKeyPepper),
+		Status:    domain.APIKeyStatusActive,
 	}
 	if err := store.CreateAPIKey(ctx, q, record); err != nil {
 		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
 	}
 	return full, nil
-}
-
-// RevealAPIKeySecret decrypts the stored ciphertext for the owning user so
-// the console can copy an existing key again.
-func (s *Services) RevealAPIKeySecret(ctx context.Context, userID, keyID uuid.UUID) (string, *ApplicationError) {
-	key, err := store.GetAPIKeyForUser(ctx, s.Pool, userID, keyID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", ErrAPIKeyNotFound()
-		}
-		slog.Error("reveal api key lookup failed", "error", err)
-		return "", NewError(500, "INTERNAL_ERROR", "Internal server error.")
-	}
-	secret, err := crypto.Open(s.Settings.SessionSecret, key.SecretCiphertext)
-	if err != nil {
-		return "", NewError(422, "KEY_SECRET_UNAVAILABLE", "该 Key 缺少可恢复的密文，无法再次显示。")
-	}
-	return secret, nil
 }
 
 // UpdateAPIKeyPolicy edits the display name, per-key quota ceiling and IP

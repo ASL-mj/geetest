@@ -227,8 +227,6 @@ function Dashboard({ goTo }: { goTo: (page: PageId) => void }) {
 
 // ---------- keys ----------
 
-const keyLimit = 5;
-
 function KeysPage() {
   const [keys, setKeys] = useState<APIKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -236,7 +234,6 @@ function KeysPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [editTarget, setEditTarget] = useState<APIKey | null>(null);
-  const [revealed, setRevealed] = useState<{ secret?: string; error?: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   const refresh = () => setReloadKey((value) => value + 1);
@@ -279,20 +276,6 @@ function KeysPage() {
       setBusyKey(null);
     }
   };
-  const copySecret = async (key: APIKey) => {
-    try {
-      const envelope = await api.revealKeySecret(key.id);
-      const secret = envelope.data?.secret ?? '';
-      if (!secret) throw new ApiError(422, 'KEY_SECRET_UNAVAILABLE', '该 Key 缺少可恢复的密文。', '');
-      // Show the dialog first; the clipboard write is best-effort because a
-      // pending permission prompt must never block the UI.
-      setRevealed({ secret });
-      navigator.clipboard?.writeText(secret).catch(() => {});
-    } catch (err) {
-      setRevealed({ error: err instanceof ApiError ? err.message : '无法获取密钥明文。' });
-    }
-  };
-
   if (error) return <LoadError message={error} onRetry={refresh} />;
   const activeCount = keys?.filter((key) => key.status !== 'DELETED').length ?? 0;
 
@@ -304,7 +287,7 @@ function KeysPage() {
           detail="已删除的 Key 不再显示，历史调用日志仍可追溯。"
           action={<button className="primary-button" onClick={() => setShowCreate(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}
         />
-        <p className="key-count-hint">共 <b>{activeCount}</b> / {keyLimit} 个（所有 Key 共享 CDK 额度池）</p>
+        <p className="key-count-hint">共 <b>{activeCount}</b> 个（所有 Key 共享 CDK 额度池）</p>
         {notice && <p className="key-notice" role="alert">{notice}</p>}
         {keys === null
           ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
@@ -328,7 +311,6 @@ function KeysPage() {
                         <td>
                           {key.status !== 'DELETED' && (
                             <div className="row-actions">
-                              <button className="action-link" disabled={busyKey === key.id} onClick={() => void copySecret(key)} type="button">复制</button>
                               <button className="action-link" disabled={busyKey === key.id} onClick={() => setEditTarget(key)} type="button">编辑</button>
                               <button className="action-link" disabled={busyKey === key.id} onClick={() => void toggle(key)} type="button">{key.status === 'ACTIVE' ? '禁用' : '启用'}</button>
                               <button className="action-link action-link--danger" disabled={busyKey === key.id} onClick={() => void remove(key)} type="button">删除</button>
@@ -344,15 +326,6 @@ function KeysPage() {
       </section>
       {showCreate && <CreateKeyDialog onClose={() => setShowCreate(false)} onCreated={refresh} />}
       {editTarget && <EditKeyDialog key={editTarget.id} apiKey={editTarget} onClose={() => setEditTarget(null)} onSaved={refresh} />}
-      {revealed && (
-        <div className="dialog-backdrop" role="presentation">
-          <section aria-labelledby="reveal-title" aria-modal="true" className="dialog" role="dialog">
-            <div className="dialog__header"><div><h2 id="reveal-title">{revealed.secret ? '密钥明文' : '无法显示明文'}</h2><p>{revealed.secret ? '已复制到剪贴板；请勿泄露给他人。' : '该 Key 创建于历史版本，没有可恢复的密文；请新建 Key 并使用新密钥。'}</p></div><button className="icon-button" onClick={() => setRevealed(null)} title="关闭" type="button"><X aria-hidden="true" size={18} /></button></div>
-            {revealed.secret && <div className="secret-field"><code>{revealed.secret}</code><CopyButton compact label="复制" text={revealed.secret} /></div>}
-            <div className="dialog__actions"><button className="primary-button" onClick={() => setRevealed(null)} type="button">完成</button></div>
-          </section>
-        </div>
-      )}
     </>
   );
 }

@@ -12,14 +12,14 @@ import (
 )
 
 // apiKeyColumns is the projection shared by every key lookup.
-const apiKeyColumns = `id, user_id, name, key_prefix, key_last4, key_hash, secret_ciphertext,
+const apiKeyColumns = `id, user_id, name, key_prefix, key_last4, key_hash,
 	       status, quota_limit, allowed_ips, total_calls, last_used_at, created_at, revoked_at`
 
 func scanAPIKey(scan func(dest ...any) error) (domain.APIKey, error) {
 	var key domain.APIKey
 	var status string
 	if err := scan(
-		&key.ID, &key.UserID, &key.Name, &key.KeyPrefix, &key.KeyLast4, &key.KeyHash, &key.SecretCiphertext,
+		&key.ID, &key.UserID, &key.Name, &key.KeyPrefix, &key.KeyLast4, &key.KeyHash,
 		&status, &key.QuotaLimit, &key.AllowedIPs, &key.TotalCalls, &key.LastUsedAt, &key.CreatedAt, &key.RevokedAt,
 	); err != nil {
 		return domain.APIKey{}, err
@@ -28,25 +28,25 @@ func scanAPIKey(scan func(dest ...any) error) (domain.APIKey, error) {
 	return key, nil
 }
 
-// CreateAPIKey inserts a new key. The peppered HMAC hash drives
-// authentication; the AES-GCM ciphertext is what lets the owner re-copy the
-// plaintext later.
+// CreateAPIKey inserts a new key. The peppered HMAC hash is the sole stored
+// credential material used for authentication.
 func CreateAPIKey(ctx context.Context, q Querier, key domain.APIKey) error {
 	_, err := q.Exec(ctx, `
-		INSERT INTO api_keys (id, user_id, name, key_prefix, key_last4, key_hash, secret_ciphertext,
+		INSERT INTO api_keys (id, user_id, name, key_prefix, key_last4, key_hash,
 		                      status, quota_limit, allowed_ips, total_calls, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-	`, key.ID, key.UserID, key.Name, key.KeyPrefix, key.KeyLast4, key.KeyHash, key.SecretCiphertext,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+	`, key.ID, key.UserID, key.Name, key.KeyPrefix, key.KeyLast4, key.KeyHash,
 		string(key.Status), key.QuotaLimit, key.AllowedIPs, key.TotalCalls)
 	return err
 }
 
-// ListAPIKeys returns the user's keys, newest first.
+// ListAPIKeys returns the user's non-deleted keys, newest first. Deleted key
+// snapshots stay available only through immutable call history.
 func ListAPIKeys(ctx context.Context, q Querier, userID uuid.UUID) ([]domain.APIKey, error) {
 	rows, err := q.Query(ctx, `
 		SELECT `+apiKeyColumns+`
 		FROM api_keys
-		WHERE user_id = $1
+		WHERE user_id = $1 AND status <> 'DELETED'
 		ORDER BY created_at DESC
 	`, userID)
 	if err != nil {

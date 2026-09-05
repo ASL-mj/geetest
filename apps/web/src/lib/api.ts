@@ -165,9 +165,6 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  revealKeySecret: (keyId: string) =>
-    request<{ secret: string }>(`/v1/keys/${keyId}/secret`),
-
   deleteKey: (keyId: string) =>
     request<APIKey>(`/v1/keys/${keyId}`, { method: 'DELETE' }),
 

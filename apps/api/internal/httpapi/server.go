@@ -52,7 +52,6 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("POST /v1/keys", server.requireUserSession(server.handleCreateKey))
 	mux.HandleFunc("GET /v1/keys", server.requireUserSession(server.handleListKeys))
 	mux.HandleFunc("PATCH /v1/keys/{key_id}", server.requireUserSession(server.handleUpdateKey))
-	mux.HandleFunc("GET /v1/keys/{key_id}/secret", server.requireUserSession(server.handleRevealKeySecret))
 	mux.HandleFunc("DELETE /v1/keys/{key_id}", server.requireUserSession(server.handleDeleteKey))
 	mux.HandleFunc("GET /v1/account", server.requireUserSession(server.handleGetAccount))
 	mux.HandleFunc("GET /v1/usage", server.requireUserSession(server.handleGetUsage))

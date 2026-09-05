@@ -220,6 +220,16 @@ func TestKeyLifecycle(t *testing.T) {
 	if deleted, _ := payload["data"].(map[string]any); deleted["status"] != "DELETED" {
 		t.Fatalf("delete failed: %v", payload)
 	}
+	listResp = h.do("GET", "/v1/keys", "", cookies...)
+	status, payload = decodeEnvelope(t, listResp)
+	if status != http.StatusOK {
+		t.Fatalf("list after delete: expected 200, got %d: %v", status, payload)
+	}
+	listData, _ = payload["data"].(map[string]any)
+	items, _ = listData["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("deleted key must be excluded from user list, got %v", items)
+	}
 	patchResp = h.do("PATCH", "/v1/keys/"+keyID, `{"name": "zombie"}`, cookies...)
 	status, payload = decodeEnvelope(t, patchResp)
 	if status != http.StatusConflict {
