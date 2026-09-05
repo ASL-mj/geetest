@@ -11,13 +11,11 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
-  PenLine,
   Play,
   Plus,
   RefreshCw,
   ShieldCheck,
   Terminal,
-  Trash2,
   X,
   Zap,
 } from 'lucide-react';
@@ -305,12 +303,12 @@ function KeysPage() {
                         <td>{formatTime(key.last_used_at)}</td>
                         <td>
                           {key.status !== 'DELETED' && (
-                            <>
-                              <button className="icon-button" onClick={() => void copySecret(key)} title="复制完整密钥" type="button"><Copy aria-hidden="true" size={16} /></button>
-                              <button className="icon-button" onClick={() => setEditTarget(key)} title="编辑" type="button"><PenLine aria-hidden="true" size={16} /></button>
-                              <button className="icon-button" onClick={() => void toggle(key)} title={key.status === 'ACTIVE' ? '禁用' : '启用'} type="button"><RefreshCw aria-hidden="true" size={16} /></button>
-                              <button className="icon-button" onClick={() => void remove(key)} title="删除" type="button"><Trash2 aria-hidden="true" size={16} /></button>
-                            </>
+                            <div className="row-actions">
+                              <button className="action-link" onClick={() => void copySecret(key)} type="button">复制</button>
+                              <button className="action-link" onClick={() => setEditTarget(key)} type="button">编辑</button>
+                              <button className="action-link" onClick={() => void toggle(key)} type="button">{key.status === 'ACTIVE' ? '禁用' : '启用'}</button>
+                              <button className="action-link action-link--danger" onClick={() => void remove(key)} type="button">删除</button>
+                            </div>
                           )}
                         </td>
                       </tr>
