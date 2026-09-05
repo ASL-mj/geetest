@@ -74,6 +74,18 @@ describe('App', () => {
     expect(screen.queryByText(/GeeTest/i)).not.toBeInTheDocument();
   });
 
+  it('switches docs sections from the sidebar instead of scrolling', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /查看 API 文档/ }));
+    expect(await screen.findByText('解析服务凭据只保存在平台后端环境中，不出现在浏览器和用户请求里。')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: '认证方式' }));
+    expect(await screen.findByText('在请求头中使用平台发放的 Bearer API Key，并为每次请求设置唯一的幂等键。')).toBeInTheDocument();
+    expect(screen.queryByText('解析服务凭据只保存在平台后端环境中，不出现在浏览器和用户请求里。')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '认证方式' })).toHaveAttribute('aria-current', 'page');
+  });
+
   it('routes the admin login gate at /admin', async () => {
     render(<App />);
 

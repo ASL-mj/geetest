@@ -572,7 +572,16 @@ function AccountPage({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-// ---------- docs (static, origin-aware) ----------
+// ---------- docs (static, origin-aware, section switching) ----------
+
+type DocsTab = 'quickstart' | 'authentication' | 'request' | 'response';
+
+const docsTabs: Array<{ id: DocsTab; label: string }> = [
+  { id: 'quickstart', label: '快速开始' },
+  { id: 'authentication', label: '认证方式' },
+  { id: 'request', label: '请求参数' },
+  { id: 'response', label: '响应与错误' },
+];
 
 function DocsPage() {
   const snippet = `curl -X POST ${window.location.origin}/v1/captcha/solve \\
@@ -580,13 +589,21 @@ function DocsPage() {
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: your-unique-request-id" \\
   -d '{"captcha_id":"captcha_id","risk_type":"slide"}'`;
+  const [active, setActive] = useState<DocsTab>('quickstart');
+  // Switch panels instead of scrolling one long page; keep the scroll
+  // position sane when the new panel is shorter.
+  const select = (id: DocsTab) => {
+    setActive(id);
+    document.querySelector('.content')?.scrollTo({ top: 0 });
+  };
   return (
     <section className="docs-layout">
-      <article className="surface docs-toc"><p className="eyebrow">快速导航</p><a href="#quickstart">快速开始</a><a href="#authentication">认证方式</a><a href="#request">请求参数</a><a href="#response">响应与错误</a></article>
+      <article className="surface docs-toc"><p className="eyebrow">快速导航</p>{docsTabs.map((tab) => <a key={tab.id} aria-current={active === tab.id ? 'page' : undefined} className={active === tab.id ? 'docs-toc__active' : undefined} href={`#${tab.id}`} onClick={(event) => { event.preventDefault(); select(tab.id); }}>{tab.label}</a>)}</article>
       <div className="docs-content">
-        <article className="surface" id="quickstart"><SectionHeading title="快速开始" detail="使用平台发放的 API Key 调用统一的解析接口。" /><div className="doc-callout"><ShieldCheck aria-hidden="true" size={19} /><p>服务端保存底层解析服务凭据。浏览器与用户程序只使用平台 API Key。</p></div><h3 id="authentication">认证方式</h3><p>请求头使用 Bearer Token，并为每次请求提供唯一的幂等键。</p><div className="code-panel"><div><span>cURL</span><CopyButton compact label="复制示例" text={snippet} /></div><pre><code>{snippet}</code></pre></div></article>
-        <article className="surface" id="request"><SectionHeading title="请求参数" /><div className="table-wrap"><table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>captcha_id</code></td><td>string</td><td>是</td><td>目标验证码标识</td></tr><tr><td><code>risk_type</code></td><td>string</td><td>是</td><td>V1 固定为 <code>slide</code></td></tr></tbody></table></div></article>
-        <article className="surface" id="response"><SectionHeading title="响应与错误" detail="所有成功和失败响应都携带平台 request_id。" /><div className="error-grid"><div><StatusPill tone="success">200</StatusPill><p>解析成功，确认消耗一单位额度。</p></div><div><StatusPill tone="warning">429</StatusPill><p>速率或并发超限，携带 Retry-After。</p></div><div><StatusPill tone="warning">402</StatusPill><p>额度耗尽，需联系管理员补充。</p></div><div><StatusPill tone="danger">502</StatusPill><p>下游异常，自动退回预扣额度。</p></div></div></article>
+        {active === 'quickstart' && <article className="surface"><SectionHeading title="快速开始" detail="使用平台发放的 API Key 调用统一的解析接口。" /><div className="doc-callout"><ShieldCheck aria-hidden="true" size={19} /><p>服务端保存底层解析服务凭据。浏览器与用户程序只使用平台 API Key。</p></div></article>}
+        {active === 'authentication' && <article className="surface"><SectionHeading title="认证方式" detail="请求头使用 Bearer Token，并为每次请求提供唯一的幂等键。" /><div className="code-panel"><div><span>cURL</span><CopyButton compact label="复制示例" text={snippet} /></div><pre><code>{snippet}</code></pre></div></article>}
+        {active === 'request' && <article className="surface"><SectionHeading title="请求参数" /><div className="table-wrap"><table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>captcha_id</code></td><td>string</td><td>是</td><td>目标验证码标识</td></tr><tr><td><code>risk_type</code></td><td>string</td><td>是</td><td>V1 固定为 <code>slide</code></td></tr></tbody></table></div></article>}
+        {active === 'response' && <article className="surface"><SectionHeading title="响应与错误" detail="所有成功和失败响应都携带平台 request_id。" /><div className="error-grid"><div><StatusPill tone="success">200</StatusPill><p>解析成功，确认消耗一单位额度。</p></div><div><StatusPill tone="warning">429</StatusPill><p>速率或并发超限，携带 Retry-After。</p></div><div><StatusPill tone="warning">402</StatusPill><p>额度耗尽，需联系管理员补充。</p></div><div><StatusPill tone="danger">502</StatusPill><p>下游异常，自动退回预扣额度。</p></div></div></article>}
       </div>
     </section>
   );
