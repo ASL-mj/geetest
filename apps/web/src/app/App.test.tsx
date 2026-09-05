@@ -6,6 +6,8 @@ import App from './App';
 // the interaction tests; the API client itself is covered by backend
 // integration tests.
 const accountMock = vi.fn();
+const adminDashboardMock = vi.fn();
+const adminListAPIKeysMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../lib/api')>();
@@ -30,6 +32,11 @@ vi.mock('../lib/api', async (importOriginal) => {
       listCalls: vi.fn(async () => ({ success: true, request_id: 'req_test', data: { items: [], next_cursor: null } })),
       listKeys: vi.fn(async () => ({ success: true, request_id: 'req_test', data: { items: [] } })),
     },
+    adminApi: {
+      ...original.adminApi,
+      dashboard: (...args: Parameters<typeof original.adminApi.dashboard>) => adminDashboardMock(...args),
+      listAPIKeys: (...args: Parameters<typeof original.adminApi.listAPIKeys>) => adminListAPIKeysMock(...args),
+    },
   };
 });
 
@@ -37,6 +44,9 @@ describe('App', () => {
   beforeEach(() => {
     accountMock.mockReset();
     accountMock.mockRejectedValue(new Error('session required'));
+    adminDashboardMock.mockReset();
+    adminDashboardMock.mockRejectedValue(new Error('admin session required'));
+    adminListAPIKeysMock.mockReset();
     // jsdom shares window.history across tests; every test starts from the
     // same public home route.
     window.history.replaceState({}, '', '/');
@@ -94,6 +104,29 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: '管理员登录' })).toBeInTheDocument();
     expect(screen.getByLabelText('用户名')).toBeInTheDocument();
     expect(screen.getByLabelText('密码')).toBeInTheDocument();
+  });
+
+  it('serves the administrator API Key query route after operator authentication', async () => {
+    adminDashboardMock.mockResolvedValue({ success: true, request_id: 'req_admin', data: {} });
+    adminListAPIKeysMock.mockResolvedValue({
+      success: true,
+      request_id: 'req_admin',
+      data: {
+        items: [{
+          id: 'key_1', user_id: 'user_1', cdk_id: 'cdk_1', cdk_prefix: 'CAPTCHA1',
+          user_status: 'ACTIVE', cdk_status: 'ACTIVE', name: 'worker', prefix: 'cf_live_x',
+          last4: '1234', status: 'ACTIVE', total_calls: 4, created_at: '2026-09-05T00:00:00Z', last_used_at: null,
+        }], next_cursor: null,
+      },
+    });
+    window.history.replaceState({}, '', '/admin/api-keys');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'API Key', level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText('worker')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'CDK 批次' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '用户管理' })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/admin/api-keys');
   });
 
   it('shows a console shortcut in the public header when a session exists', async () => {

@@ -34,6 +34,7 @@ func serializeCall(record store.CallRecord) map[string]any {
 		"status":         record.Status,
 		"http_status":    record.HTTPStatus,
 		"error_code":     record.ErrorCode,
+		"error_summary":  record.ErrorSummary,
 		"accepted_at":    record.AcceptedAt.UTC().Format(timeFormatUTC),
 		"completed_at":   formatTimePtr(record.CompletedAt),
 		"duration_ms":    record.DurationMS,

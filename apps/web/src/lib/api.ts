@@ -97,6 +97,7 @@ export interface CallRecord {
   status: string;
   http_status: number;
   error_code: string | null;
+  error_summary: string | null;
   accepted_at: string;
   completed_at: string | null;
   duration_ms: number | null;
@@ -245,6 +246,48 @@ export interface AdminUser {
   cdk_remaining: number | null;
 }
 
+export interface AdminAPIKey {
+  id: string;
+  user_id: string;
+  cdk_id: string | null;
+  cdk_prefix: string | null;
+  user_status: string;
+  cdk_status: string | null;
+  name: string;
+  prefix: string;
+  last4: string;
+  status: string;
+  total_calls: number;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface AdminCall extends CallRecord {
+  user_id: string;
+  cdk_id: string;
+  api_key_id: string;
+}
+
+export interface AdminQuotaLedgerEntry {
+  id: string;
+  cdk_id: string;
+  user_id: string | null;
+  api_call_id: string | null;
+  entry_type: string;
+  available_before: number;
+  delta_available: number;
+  available_after: number;
+  used_before: number;
+  used_after: number;
+  reserved_before: number;
+  reserved_after: number;
+  reason: string;
+  request_id: string;
+  actor_type: string;
+  actor_id: string | null;
+  created_at: string;
+}
+
 export interface AdminAuditEntry {
   id: string;
   admin_user_id: string;
@@ -307,6 +350,44 @@ export const adminApi = {
     }),
 
   listUsers: () => request<{ items: AdminUser[] }>('/admin/v1/users'),
+
+  listAPIKeys: (params: { user_id?: string; status?: string; prefix?: string; cursor?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.user_id) query.set('user_id', params.user_id);
+    if (params.status) query.set('status', params.status);
+    if (params.prefix) query.set('prefix', params.prefix);
+    if (params.cursor) query.set('cursor', params.cursor);
+    query.set('limit', String(params.limit ?? 20));
+    return request<{ items: AdminAPIKey[]; next_cursor: string | null }>(`/admin/v1/api-keys?${query}`);
+  },
+
+  listCalls: (params: { user_id?: string; cdk_id?: string; api_key_id?: string; status?: string; captcha_id?: string; request_id?: string; from?: string; to?: string; cursor?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.user_id) query.set('user_id', params.user_id);
+    if (params.cdk_id) query.set('cdk_id', params.cdk_id);
+    if (params.api_key_id) query.set('api_key_id', params.api_key_id);
+    if (params.status) query.set('status', params.status);
+    if (params.captcha_id) query.set('captcha_id', params.captcha_id);
+    if (params.request_id) query.set('request_id', params.request_id);
+    if (params.from) query.set('from', params.from);
+    if (params.to) query.set('to', params.to);
+    if (params.cursor) query.set('cursor', params.cursor);
+    query.set('limit', String(params.limit ?? 20));
+    return request<{ items: AdminCall[]; next_cursor: string | null }>(`/admin/v1/calls?${query}`);
+  },
+
+  listQuotaLedger: (params: { cdk_id?: string; user_id?: string; entry_type?: string; request_id?: string; from?: string; to?: string; cursor?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.cdk_id) query.set('cdk_id', params.cdk_id);
+    if (params.user_id) query.set('user_id', params.user_id);
+    if (params.entry_type) query.set('entry_type', params.entry_type);
+    if (params.request_id) query.set('request_id', params.request_id);
+    if (params.from) query.set('from', params.from);
+    if (params.to) query.set('to', params.to);
+    if (params.cursor) query.set('cursor', params.cursor);
+    query.set('limit', String(params.limit ?? 20));
+    return request<{ items: AdminQuotaLedgerEntry[]; next_cursor: string | null }>(`/admin/v1/quota-ledger?${query}`);
+  },
 
   setUserStatus: (userId: string, status: string, reason: string) =>
     request<{ status: string }>(`/admin/v1/users/${userId}`, {

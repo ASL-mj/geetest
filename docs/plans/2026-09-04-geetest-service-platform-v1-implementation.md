@@ -17,7 +17,7 @@
 - [x] Solver gateway proxy, redacted call logs, user console and public docs.
 - [x] Administrator authentication, CDK batches/CDKs, users, audit, health and settings UI.
 - [x] Quota settlement recovery, transition-failure cleanup, JSON strict decoding and route synchronization.
-- [ ] Administrator API Key/call-log/quota-ledger query pages and filters.
+- [x] Administrator API Key/call-log/quota-ledger query pages and filters.
 - [ ] OpenAPI contract, production reverse proxy and CI/release acceptance gates.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

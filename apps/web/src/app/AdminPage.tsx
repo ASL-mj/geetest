@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Copy,
+  Database,
   FileText,
   KeyRound,
   LayoutDashboard,
@@ -11,20 +12,20 @@ import {
   ServerCog,
   Settings,
   ShieldAlert,
-  Users,
-  Layers3,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 
-import { adminApi, ApiError, type AdminAuditEntry, type AdminBatch, type AdminCdk, type AdminDashboard, type AdminUser, type SystemConfig } from '../lib/api';
+import { adminApi, ApiError, type AdminAPIKey, type AdminAuditEntry, type AdminCall, type AdminCdk, type AdminDashboard, type AdminQuotaLedgerEntry, type SystemConfig } from '../lib/api';
 import { adminPath, navigate, type AdminSection } from '../lib/router';
 import { cdkStatusMeta, formatCount, formatTime, type StatusTone } from '../lib/status';
 
 const adminNavigation: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: '数据概览', icon: LayoutDashboard },
-  { id: 'batches', label: 'CDK 批次', icon: Layers3 },
   { id: 'cdks', label: 'CDK 管理', icon: KeyRound },
-  { id: 'users', label: '用户管理', icon: Users },
+  { id: 'api-keys', label: 'API Key', icon: KeyRound },
+  { id: 'calls', label: '调用日志', icon: FileText },
+  { id: 'quota-ledger', label: '配额流水', icon: Database },
   { id: 'audit', label: '管理员审计', icon: FileText },
   { id: 'health', label: '服务状态', icon: ServerCog },
   { id: 'system', label: '系统配置', icon: Settings },
@@ -141,7 +142,7 @@ function CdksSection() {
         : (
           <div className="admin-table-wrap">
             <table>
-              <thead><tr><th>前缀</th><th>状态</th><th>备注</th><th>绑定用户</th><th>额度</th><th>剩余</th><th>激活时间</th><th aria-label="操作" /></tr></thead>
+              <thead><tr><th>前缀</th><th>批次</th><th>状态</th><th>备注</th><th>绑定用户</th><th>额度</th><th>剩余</th><th>激活时间</th><th aria-label="操作" /></tr></thead>
               <tbody>
                 {cdks.map((cdk) => {
                   const meta = cdkStatusMeta(cdk.status);
@@ -149,6 +150,7 @@ function CdksSection() {
                   return (
                     <tr key={cdk.id}>
                       <td><span className="admin-mono">{cdk.code_prefix}</span></td>
+                      <td>{cdk.batch_name}</td>
                       <td><AdminStatus tone={meta.tone}>{meta.label}</AdminStatus></td>
                       <td><span className="admin-remark" title={cdk.remark ?? ''}>{cdk.remark || '—'}</span></td>
                       <td>
@@ -226,47 +228,153 @@ function CdksSection() {
   );
 }
 
-function BatchesSection() {
-  const [batches, setBatches] = useState<AdminBatch[] | null>(null);
+function AdminFilters({ children }: { children: ReactNode }) {
+  return <div className="admin-query-filters"><SlidersHorizontal aria-hidden="true" size={15} />{children}</div>;
+}
+
+function PageControls({ nextCursor, loading, onNext }: { nextCursor: string | null; loading: boolean; onNext: () => void }) {
+  return <div className="admin-pagination"><span>{nextCursor ? '还有更多记录' : '已显示全部匹配记录'}</span><button disabled={!nextCursor || loading} onClick={onNext} title="加载下一页" type="button">{loading ? '…' : '下一页'}</button></div>;
+}
+
+function asUTCQueryTime(value: string): string | undefined {
+  return value ? new Date(value).toISOString() : undefined;
+}
+
+function ApiKeysSection() {
+  const [items, setItems] = useState<AdminAPIKey[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [userID, setUserID] = useState('');
+  const [status, setStatus] = useState('');
+  const [prefix, setPrefix] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const load = () => {
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const load = (cursor?: string, append = false) => {
     setError(null);
-    void adminApi.listBatches()
-      .then((envelope) => setBatches(envelope.data?.items ?? []))
-      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
+    void adminApi.listAPIKeys({ user_id: userID, status, prefix, cursor })
+      .then((envelope) => {
+        const data = envelope.data ?? { items: [], next_cursor: null };
+        setItems((current) => append ? [...(current ?? []), ...data.items] : data.items);
+        setNextCursor(data.next_cursor);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'))
+      .finally(() => setLoadingMore(false));
   };
+  // Filters are applied explicitly to avoid a request per keystroke.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
-  if (error) return <AdminError message={error} onRetry={load} />;
+  const apply = () => load();
+  if (error && items === null) return <AdminError message={error} onRetry={load} />;
   return <section className="admin-panel">
-    <div className="admin-panel__heading"><div><h2>CDK 批次</h2><p>按批次查看发放规模、默认额度和激活情况。</p></div></div>
-    {batches === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
-      : batches.length === 0 ? <div className="empty-state"><Layers3 aria-hidden="true" size={26} /><strong>暂无批次</strong></div>
-      : <div className="admin-table-wrap"><table><thead><tr><th>批次名称</th><th>默认额度</th><th>CDK 数量</th><th>已激活</th><th>创建时间</th></tr></thead><tbody>
-        {batches.map((batch) => <tr key={batch.id}><td><strong>{batch.name}</strong></td><td className="admin-mono">{formatCount(batch.default_quota)}</td><td className="admin-mono">{formatCount(batch.total_cdks)}</td><td className="admin-mono">{formatCount(batch.active_cdks)}</td><td>{formatTime(batch.created_at)}</td></tr>)}
-      </tbody></table></div>}
+    <div className="admin-panel__heading"><div><h2>API Key</h2><p>按状态和前缀定位归属 Key；密钥明文与哈希均不展示。</p></div></div>
+    <AdminFilters>
+      <select aria-label="Key 状态" className="admin-filter" onChange={(event) => setStatus(event.target.value)} value={status}><option value="">全部状态</option><option value="ACTIVE">启用</option><option value="DISABLED">禁用</option><option value="DELETED">已删除</option></select>
+      <input aria-label="归属用户 ID" className="admin-filter" onChange={(event) => setUserID(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') apply(); }} placeholder="归属用户 UUID" value={userID} />
+      <input aria-label="Key 前缀" className="admin-filter" onChange={(event) => setPrefix(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') apply(); }} placeholder="Key 前缀" value={prefix} />
+      <button className="quiet-button" onClick={apply} type="button">筛选</button>
+    </AdminFilters>
+    {error && <div className="admin-inline-error" role="alert"><ShieldAlert aria-hidden="true" size={15} />{error}</div>}
+    {items === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+      : items.length === 0 ? <div className="empty-state"><KeyRound aria-hidden="true" size={26} /><strong>暂无匹配 Key</strong></div>
+        : <><div className="admin-table-wrap"><table><thead><tr><th>名称</th><th>Key 标识</th><th>状态</th><th>归属用户</th><th>关联 CDK</th><th>调用次数</th><th>最后使用</th></tr></thead><tbody>
+          {items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td><span className="admin-mono">{item.prefix}…{item.last4}</span></td><td><AdminStatus tone={item.status === 'ACTIVE' ? 'success' : item.status === 'DISABLED' ? 'danger' : 'neutral'}>{item.status}</AdminStatus></td><td><span className="admin-mono">{item.user_id.slice(0, 12)}…</span></td><td><span className="admin-mono">{item.cdk_prefix ?? '—'}</span></td><td className="admin-mono">{formatCount(item.total_calls)}</td><td>{formatTime(item.last_used_at)}</td></tr>)}
+        </tbody></table></div><PageControls loading={loadingMore} nextCursor={nextCursor} onNext={() => { if (nextCursor) { setLoadingMore(true); load(nextCursor, true); } }} /></>}
   </section>;
 }
 
-function UsersSection() {
-  const [users, setUsers] = useState<AdminUser[] | null>(null);
+function CallsSection() {
+  const [items, setItems] = useState<AdminCall[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [userID, setUserID] = useState('');
+  const [cdkID, setCdkID] = useState('');
+  const [keyID, setKeyID] = useState('');
+  const [status, setStatus] = useState('');
+  const [captchaID, setCaptchaID] = useState('');
+  const [requestID, setRequestID] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [target, setTarget] = useState<AdminUser | null>(null);
-  const load = () => {
+  const [loadingMore, setLoadingMore] = useState(false);
+  const load = (cursor?: string, append = false) => {
     setError(null);
-    void adminApi.listUsers()
-      .then((envelope) => setUsers(envelope.data?.items ?? []))
-      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'));
+    void adminApi.listCalls({ user_id: userID, cdk_id: cdkID, api_key_id: keyID, status, captcha_id: captchaID, request_id: requestID, from: asUTCQueryTime(from), to: asUTCQueryTime(to), cursor })
+      .then((envelope) => {
+        const data = envelope.data ?? { items: [], next_cursor: null };
+        setItems((current) => append ? [...(current ?? []), ...data.items] : data.items);
+        setNextCursor(data.next_cursor);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'))
+      .finally(() => setLoadingMore(false));
   };
+  // Filters are applied explicitly to avoid a request per keystroke.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
-  if (error) return <AdminError message={error} onRetry={load} />;
+  if (error && items === null) return <AdminError message={error} onRetry={load} />;
   return <section className="admin-panel">
-    <div className="admin-panel__heading"><div><h2>用户管理</h2><p>查看 CDK 绑定与剩余额度，封禁会立即撤销用户会话。</p></div></div>
-    {users === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
-      : users.length === 0 ? <div className="empty-state"><Users aria-hidden="true" size={26} /><strong>暂无用户</strong></div>
-      : <div className="admin-table-wrap"><table><thead><tr><th>用户 ID</th><th>状态</th><th>绑定 CDK</th><th>CDK 状态</th><th>剩余额度</th><th aria-label="操作" /></tr></thead><tbody>
-        {users.map((user) => <tr key={user.id}><td><span className="admin-mono">{user.id.slice(0, 12)}…</span></td><td><AdminStatus tone={user.status === 'ACTIVE' ? 'success' : 'danger'}>{user.status === 'ACTIVE' ? '正常' : '已封禁'}</AdminStatus></td><td className="admin-mono">{user.cdk_prefix ?? '—'}</td><td>{user.cdk_status ?? '—'}</td><td className="admin-mono">{user.cdk_remaining == null ? '—' : formatCount(user.cdk_remaining)}</td><td className="admin-actions"><button className="admin-action admin-action--danger" onClick={() => setTarget(user)} type="button">{user.status === 'ACTIVE' ? '封禁' : '恢复'}</button></td></tr>)}
-      </tbody></table></div>}
-    {target && <ReasonDialog title={target.status === 'ACTIVE' ? '封禁用户' : '恢复用户'} description="操作会写入管理员审计日志。" confirmLabel={target.status === 'ACTIVE' ? '封禁' : '恢复'} onClose={() => setTarget(null)} onSubmit={(reason) => adminApi.setUserStatus(target.id, target.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE', reason).then(() => undefined)} onDone={() => { setTarget(null); load(); }} />}
+    <div className="admin-panel__heading"><div><h2>调用日志</h2><p>查询请求状态、耗时、错误摘要和关联归属；不展示敏感解析结果。</p></div></div>
+    <AdminFilters>
+      <select aria-label="调用状态" className="admin-filter" onChange={(event) => setStatus(event.target.value)} value={status}><option value="">全部状态</option><option value="SUCCEEDED">成功</option><option value="FAILED_REFUNDED">失败已退款</option><option value="REJECTED">已拒绝</option><option value="RESERVED">处理中</option></select>
+      <input aria-label="用户 ID" className="admin-filter" onChange={(event) => setUserID(event.target.value)} placeholder="用户 UUID" value={userID} />
+      <input aria-label="CDK ID" className="admin-filter" onChange={(event) => setCdkID(event.target.value)} placeholder="CDK UUID" value={cdkID} />
+      <input aria-label="API Key ID" className="admin-filter" onChange={(event) => setKeyID(event.target.value)} placeholder="Key UUID" value={keyID} />
+      <input aria-label="Captcha ID" className="admin-filter" onChange={(event) => setCaptchaID(event.target.value)} placeholder="Captcha ID" value={captchaID} />
+      <input aria-label="请求 ID" className="admin-filter" onChange={(event) => setRequestID(event.target.value)} placeholder="请求 ID" value={requestID} />
+      <input aria-label="开始时间" className="admin-filter" onChange={(event) => setFrom(event.target.value)} type="datetime-local" value={from} />
+      <input aria-label="结束时间" className="admin-filter" onChange={(event) => setTo(event.target.value)} type="datetime-local" value={to} />
+      <button className="quiet-button" onClick={() => load()} type="button">筛选</button>
+    </AdminFilters>
+    {error && <div className="admin-inline-error" role="alert"><ShieldAlert aria-hidden="true" size={15} />{error}</div>}
+    {items === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+      : items.length === 0 ? <div className="empty-state"><FileText aria-hidden="true" size={26} /><strong>暂无匹配调用</strong></div>
+        : <><div className="admin-table-wrap"><table><thead><tr><th>请求 ID</th><th>Captcha ID</th><th>Key</th><th>状态</th><th>耗时</th><th>错误摘要</th><th>时间</th></tr></thead><tbody>
+          {items.map((item) => <tr key={item.request_id}><td><span className="admin-mono">{item.request_id}</span></td><td><span className="admin-mono">{item.captcha_id}</span></td><td><span className="admin-mono">{item.api_key_prefix}</span></td><td><AdminStatus tone={item.status === 'SUCCEEDED' ? 'success' : item.status === 'FAILED_REFUNDED' ? 'danger' : item.status === 'REJECTED' ? 'warning' : 'neutral'}>{item.status}</AdminStatus></td><td className="admin-mono">{item.duration_ms == null ? '—' : `${item.duration_ms} ms`}</td><td title={item.error_summary ?? ''}>{item.error_summary ?? item.error_code ?? '—'}</td><td>{formatTime(item.accepted_at)}</td></tr>)}
+        </tbody></table></div><PageControls loading={loadingMore} nextCursor={nextCursor} onNext={() => { if (nextCursor) { setLoadingMore(true); load(nextCursor, true); } }} /></>}
+  </section>;
+}
+
+function QuotaLedgerSection() {
+  const [items, setItems] = useState<AdminQuotaLedgerEntry[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [cdkID, setCdkID] = useState('');
+  const [userID, setUserID] = useState('');
+  const [entryType, setEntryType] = useState('');
+  const [requestID, setRequestID] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const load = (cursor?: string, append = false) => {
+    setError(null);
+    void adminApi.listQuotaLedger({ cdk_id: cdkID, user_id: userID, entry_type: entryType, request_id: requestID, from: asUTCQueryTime(from), to: asUTCQueryTime(to), cursor })
+      .then((envelope) => {
+        const data = envelope.data ?? { items: [], next_cursor: null };
+        setItems((current) => append ? [...(current ?? []), ...data.items] : data.items);
+        setNextCursor(data.next_cursor);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : '网络错误。'))
+      .finally(() => setLoadingMore(false));
+  };
+  // Filters are applied explicitly to avoid a request per keystroke.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []);
+  if (error && items === null) return <AdminError message={error} onRetry={load} />;
+  return <section className="admin-panel">
+    <div className="admin-panel__heading"><div><h2>配额流水</h2><p>只读账本，记录预扣、确认、退款和管理员调整的每次变动。</p></div></div>
+    <AdminFilters>
+      <select aria-label="流水类型" className="admin-filter" onChange={(event) => setEntryType(event.target.value)} value={entryType}><option value="">全部类型</option><option value="RESERVE">预扣</option><option value="CONFIRM">确认</option><option value="REFUND">退款</option><option value="ADMIN_ADJUSTMENT">管理员调整</option></select>
+      <input aria-label="关联 CDK ID" className="admin-filter" onChange={(event) => setCdkID(event.target.value)} placeholder="CDK UUID" value={cdkID} />
+      <input aria-label="关联用户 ID" className="admin-filter" onChange={(event) => setUserID(event.target.value)} placeholder="用户 UUID" value={userID} />
+      <input aria-label="关联请求 ID" className="admin-filter" onChange={(event) => setRequestID(event.target.value)} placeholder="关联请求 ID" value={requestID} />
+      <input aria-label="流水开始时间" className="admin-filter" onChange={(event) => setFrom(event.target.value)} type="datetime-local" value={from} />
+      <input aria-label="流水结束时间" className="admin-filter" onChange={(event) => setTo(event.target.value)} type="datetime-local" value={to} />
+      <button className="quiet-button" onClick={() => load()} type="button">筛选</button>
+    </AdminFilters>
+    {error && <div className="admin-inline-error" role="alert"><ShieldAlert aria-hidden="true" size={15} />{error}</div>}
+    {items === null ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
+      : items.length === 0 ? <div className="empty-state"><Database aria-hidden="true" size={26} /><strong>暂无匹配流水</strong></div>
+        : <><div className="admin-table-wrap"><table><thead><tr><th>类型</th><th>额度变动</th><th>可用额度</th><th>已用额度</th><th>原因</th><th>请求 ID</th><th>时间</th></tr></thead><tbody>
+          {items.map((item) => <tr key={item.id}><td><AdminStatus tone={item.entry_type === 'REFUND' ? 'warning' : item.entry_type === 'ADMIN_ADJUSTMENT' ? 'neutral' : 'success'}>{item.entry_type}</AdminStatus></td><td className="admin-mono">{item.delta_available > 0 ? `+${item.delta_available}` : item.delta_available}</td><td className="admin-mono">{item.available_before} → {item.available_after}</td><td className="admin-mono">{item.used_before} → {item.used_after}</td><td title={item.reason}>{item.reason}</td><td><span className="admin-mono">{item.request_id}</span></td><td>{formatTime(item.created_at)}</td></tr>)}
+        </tbody></table></div><PageControls loading={loadingMore} nextCursor={nextCursor} onNext={() => { if (nextCursor) { setLoadingMore(true); load(nextCursor, true); } }} /></>}
   </section>;
 }
 
@@ -654,9 +762,10 @@ export function AdminPage({ initialSection, onExit }: { initialSection?: AdminSe
             <div><p className="public-eyebrow">OPERATIONS CONSOLE</p><h1>{current.label}</h1><p>统一管理 CDK、用户、调用审计与平台运行配置。</p></div>
           </div>
           {section === 'overview' && <OverviewSection />}
-          {section === 'batches' && <BatchesSection />}
           {section === 'cdks' && <CdksSection />}
-          {section === 'users' && <UsersSection />}
+          {section === 'api-keys' && <ApiKeysSection />}
+          {section === 'calls' && <CallsSection />}
+          {section === 'quota-ledger' && <QuotaLedgerSection />}
           {section === 'audit' && <AuditSection />}
           {section === 'health' && <HealthSection />}
           {section === 'system' && <SystemSection />}

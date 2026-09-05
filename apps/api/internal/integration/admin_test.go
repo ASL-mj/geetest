@@ -2,8 +2,10 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +246,101 @@ func TestAdminEnableExpiredUnboundCdkKeepsExpiredStatus(t *testing.T) {
 	data, _ := payload["data"].(map[string]any)
 	if data["status"] != "EXPIRED" {
 		t.Fatalf("expired unbound cdk must remain expired when enabled: %v", data)
+	}
+}
+
+func TestAdminQuerySurfacesFilterAndRedactData(t *testing.T) {
+	base := newHarness(t)
+	seedAdmin(t, base, "query-admin", store.AdminRoleAdmin)
+	admin := adminLogin(t, base, "query-admin")
+	_, code := base.seedCDK(nil)
+	activation := base.activate(code)
+	status, payload := decodeEnvelope(t, activation)
+	if status != http.StatusCreated {
+		t.Fatalf("activation failed: %d %v", status, payload)
+	}
+	user, _ := payload["data"].(map[string]any)
+	userID, _ := uuid.Parse(user["user"].(map[string]any)["id"].(string))
+	created, appErr := base.services.CreateAPIKey(context.Background(), userID, "worker")
+	if appErr != nil {
+		t.Fatalf("create second key: %v", appErr)
+	}
+	var cdkID uuid.UUID
+	if err := base.services.Pool.QueryRow(context.Background(), `SELECT id FROM cdks WHERE bound_user_id = $1`, userID).Scan(&cdkID); err != nil {
+		t.Fatalf("load cdk: %v", err)
+	}
+	callID := uuid.New()
+	acceptedAt := time.Now().UTC().Add(-time.Minute)
+	_, err := base.services.Pool.Exec(context.Background(), `
+		INSERT INTO api_calls (
+			id, request_id, operation, idempotency_key_hash, user_id, cdk_id, api_key_id,
+			api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type,
+			status, http_status, error_code, error_summary, accepted_at, completed_at,
+			duration_ms, quota_reserved, quota_refunded, client_ip_masked, client_ip_hash, user_agent
+		) VALUES ($1, 'req_admin_query_1', 'captcha.solve', $2, $3, $4, $5,
+			'worker', $6, 'cap-admin', 'slide', 'FAILED_REFUNDED', 502,
+			'SOLVER_FAILED', 'downstream failed', $7, $7, 83, true, true,
+			'192.0.2.0/24', $8, 'admin-query-test')
+	`, callID, []byte("admin-query-idem"), userID, cdkID, created.Record.ID,
+		created.Record.KeyPrefix, acceptedAt, []byte("ip-hash"))
+	if err != nil {
+		t.Fatalf("insert call: %v", err)
+	}
+	for _, entryType := range []string{"RESERVE", "REFUND"} {
+		_, err = base.services.Pool.Exec(context.Background(), `
+		INSERT INTO quota_ledger (
+			id, cdk_id, user_id, api_call_id, entry_type,
+			available_before, delta_available, available_after,
+			used_before, used_after, reserved_before, reserved_after,
+			reason, request_id, actor_type, created_at
+		) VALUES ($1, $2, $3, $4, $5, 100, $6, $7, 0, 0, 0, 0, $8, 'req_admin_query_1', 'user', $9)
+	`, uuid.New(), cdkID, userID, callID, entryType,
+			map[string]int64{"RESERVE": -1, "REFUND": 1}[entryType],
+			map[string]int64{"RESERVE": 99, "REFUND": 100}[entryType],
+			"query test "+entryType, acceptedAt)
+		if err != nil {
+			t.Fatalf("insert ledger %s: %v", entryType, err)
+		}
+	}
+
+	status, payload = decodeEnvelope(t, base.do("GET", fmt.Sprintf("/admin/v1/api-keys?user_id=%s&status=ACTIVE&limit=1", userID), "", admin))
+	if status != http.StatusOK {
+		t.Fatalf("admin key query failed: %d %v", status, payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	items, _ := data["items"].([]any)
+	if len(items) != 1 || data["next_cursor"] == nil {
+		t.Fatalf("key query must paginate active keys: %v", data)
+	}
+	serialized, _ := json.Marshal(items[0])
+	if strings.Contains(string(serialized), created.Secret) || strings.Contains(string(serialized), "key_hash") {
+		t.Fatalf("admin key query leaked secret material: %s", serialized)
+	}
+
+	from := url.QueryEscape(acceptedAt.Add(-time.Minute).Format(time.RFC3339Nano))
+	to := url.QueryEscape(acceptedAt.Add(time.Minute).Format(time.RFC3339Nano))
+	status, payload = decodeEnvelope(t, base.do("GET", fmt.Sprintf("/admin/v1/calls?user_id=%s&cdk_id=%s&api_key_id=%s&captcha_id=cap-admin&status=FAILED_REFUNDED&from=%s&to=%s", userID, cdkID, created.Record.ID, from, to), "", admin))
+	if status != http.StatusOK {
+		t.Fatalf("admin call query failed: %d %v", status, payload)
+	}
+	data, _ = payload["data"].(map[string]any)
+	items, _ = data["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["error_summary"] != "downstream failed" {
+		t.Fatalf("call filter or error summary missing: %v", data)
+	}
+	serialized, _ = json.Marshal(items[0])
+	if strings.Contains(string(serialized), "response_json") || strings.Contains(string(serialized), "pass_token") {
+		t.Fatalf("admin call query leaked sensitive response data: %s", serialized)
+	}
+
+	status, payload = decodeEnvelope(t, base.do("GET", fmt.Sprintf("/admin/v1/quota-ledger?cdk_id=%s&user_id=%s&entry_type=REFUND&request_id=req_admin_query_1&from=%s&to=%s", cdkID, userID, from, to), "", admin))
+	if status != http.StatusOK {
+		t.Fatalf("admin ledger query failed: %d %v", status, payload)
+	}
+	data, _ = payload["data"].(map[string]any)
+	items, _ = data["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["delta_available"].(float64) != 1 {
+		t.Fatalf("ledger filter mismatch: %v", data)
 	}
 }
 

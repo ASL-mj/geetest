@@ -77,6 +77,7 @@ type CallRecord struct {
 	Status         string
 	HTTPStatus     int
 	ErrorCode      *string
+	ErrorSummary   *string
 	AcceptedAt     time.Time
 	CompletedAt    *time.Time
 	DurationMS     *int
@@ -99,7 +100,7 @@ type CallCursor struct {
 func ListCallsForUser(ctx context.Context, q Querier, userID uuid.UUID, cursor *CallCursor, limit int) ([]CallRecord, error) {
 	sql := `
 		SELECT request_id, api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type,
-		       status, http_status, error_code, accepted_at, completed_at, duration_ms,
+		       status, http_status, error_code, error_summary, accepted_at, completed_at, duration_ms,
 		       quota_reserved, quota_refunded, client_ip_masked::text, user_agent
 		FROM api_calls
 		WHERE user_id = $1`
@@ -121,7 +122,7 @@ func ListCallsForUser(ctx context.Context, q Querier, userID uuid.UUID, cursor *
 	for rows.Next() {
 		var record CallRecord
 		if err := rows.Scan(&record.RequestID, &record.APIKeyName, &record.APIKeyPrefix, &record.CaptchaID,
-			&record.RiskType, &record.Status, &record.HTTPStatus, &record.ErrorCode, &record.AcceptedAt,
+			&record.RiskType, &record.Status, &record.HTTPStatus, &record.ErrorCode, &record.ErrorSummary, &record.AcceptedAt,
 			&record.CompletedAt, &record.DurationMS, &record.QuotaReserved, &record.QuotaRefunded,
 			&record.ClientIPMasked, &record.UserAgent); err != nil {
 			return nil, err
@@ -138,12 +139,12 @@ func GetCallForUser(ctx context.Context, q Querier, userID uuid.UUID, requestID 
 	var record CallRecord
 	err := q.QueryRow(ctx, `
 		SELECT request_id, api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type,
-		       status, http_status, error_code, accepted_at, completed_at, duration_ms,
+		       status, http_status, error_code, error_summary, accepted_at, completed_at, duration_ms,
 		       quota_reserved, quota_refunded, client_ip_masked::text, user_agent
 		FROM api_calls
 		WHERE user_id = $1 AND request_id = $2
 	`, userID, requestID).Scan(&record.RequestID, &record.APIKeyName, &record.APIKeyPrefix, &record.CaptchaID,
-		&record.RiskType, &record.Status, &record.HTTPStatus, &record.ErrorCode, &record.AcceptedAt,
+		&record.RiskType, &record.Status, &record.HTTPStatus, &record.ErrorCode, &record.ErrorSummary, &record.AcceptedAt,
 		&record.CompletedAt, &record.DurationMS, &record.QuotaReserved, &record.QuotaRefunded,
 		&record.ClientIPMasked, &record.UserAgent)
 	if err != nil {
