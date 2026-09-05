@@ -3,11 +3,15 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/captchaflow/service-platform/api/internal/httpapi"
@@ -175,7 +179,7 @@ func TestCallsListIsOwnerScopedAndPaginated(t *testing.T) {
 
 	// Cursor pagination reaches the remaining page without duplicates.
 	cursor, _ := data["next_cursor"].(string)
-	status, payload = decodeEnvelope(t, q.base.do("GET", "/v1/calls?limit=1&cursor="+cursor, "", q.cookies["alice"]))
+	status, payload = decodeEnvelope(t, q.base.do("GET", "/v1/calls?limit=1&cursor="+url.QueryEscape(cursor), "", q.cookies["alice"]))
 	if status != http.StatusOK {
 		t.Fatalf("cursor page failed: %d: %v", status, payload)
 	}
@@ -199,6 +203,62 @@ func TestCallsListIsOwnerScopedAndPaginated(t *testing.T) {
 	data, _ = payload["data"].(map[string]any)
 	if data["request_id"] != aliceCall {
 		t.Fatalf("detail mismatch: %v", data)
+	}
+}
+
+func TestCallsPaginationDoesNotSkipSameTimestampRecords(t *testing.T) {
+	q := newQueryHarness(t)
+	q.addUser("alice")
+	caller, appErr := q.base.services.AuthenticateAPIKey(context.Background(), q.secrets["alice"])
+	if appErr != nil {
+		t.Fatalf("authenticate setup key: %v", appErr)
+	}
+
+	acceptedAt := time.Date(2026, time.January, 2, 3, 4, 5, 6000000, time.UTC)
+	for i := range 3 {
+		if _, err := q.base.services.Pool.Exec(context.Background(), `
+			INSERT INTO api_calls (
+				id, request_id, operation, idempotency_key_hash, user_id, cdk_id, api_key_id,
+				api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type,
+				status, http_status, quota_reserved, quota_refunded,
+				client_ip_masked, client_ip_hash, user_agent, accepted_at
+			) VALUES (
+				$1, $2, 'captcha.solve', $3, $4, $5, $6,
+				$7, $8, $9, 'slide', 'SUCCEEDED', 200, false, false,
+				'192.0.2.0/24', $10, 'pagination-test', $11
+			)
+		`, uuid.New(), fmt.Sprintf("req_tie_%d", i), []byte(fmt.Sprintf("tie-%d", i)),
+			caller.UserID, caller.CDKID, caller.APIKeyID, caller.APIKey.Name, caller.APIKey.KeyPrefix,
+			fmt.Sprintf("cap-tie-%d", i), []byte("test-ip-hash"), acceptedAt); err != nil {
+			t.Fatalf("seed same-timestamp call %d: %v", i, err)
+		}
+	}
+
+	status, payload := decodeEnvelope(t, q.base.do("GET", "/v1/calls?limit=1", "", q.cookies["alice"]))
+	if status != http.StatusOK {
+		t.Fatalf("first page failed: %d %v", status, payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	firstItems, _ := data["items"].([]any)
+	if len(firstItems) != 1 {
+		t.Fatalf("expected one first-page record, got %v", firstItems)
+	}
+	cursor, _ := data["next_cursor"].(string)
+	if cursor == "" {
+		t.Fatal("same-timestamp records must produce a next cursor")
+	}
+
+	status, payload = decodeEnvelope(t, q.base.do("GET", "/v1/calls?limit=1&cursor="+url.QueryEscape(cursor), "", q.cookies["alice"]))
+	if status != http.StatusOK {
+		t.Fatalf("second page failed: %d %v", status, payload)
+	}
+	data, _ = payload["data"].(map[string]any)
+	secondItems, _ := data["items"].([]any)
+	if len(secondItems) != 1 {
+		t.Fatalf("same-timestamp cursor must not skip the next record: %v", secondItems)
+	}
+	if firstItems[0].(map[string]any)["request_id"] == secondItems[0].(map[string]any)["request_id"] {
+		t.Fatalf("same-timestamp cursor must not duplicate the first record: %v", secondItems)
 	}
 }
 

@@ -86,9 +86,17 @@ type CallRecord struct {
 	UserAgent      string
 }
 
+// CallCursor is the stable boundary for descending call-log pagination. The
+// request id breaks accepted_at ties created by concurrent calls.
+type CallCursor struct {
+	AcceptedAt time.Time
+	RequestID  string
+}
+
 // ListCallsForUser returns the newest calls of one user with cursor
-// pagination; cursor is an RFC3339 accepted_at upper bound, exclusive.
-func ListCallsForUser(ctx context.Context, q Querier, userID uuid.UUID, cursor *time.Time, limit int) ([]CallRecord, error) {
+// pagination. Both cursor fields participate in the exclusive boundary so
+// records sharing a timestamp are neither skipped nor duplicated.
+func ListCallsForUser(ctx context.Context, q Querier, userID uuid.UUID, cursor *CallCursor, limit int) ([]CallRecord, error) {
 	sql := `
 		SELECT request_id, api_key_name_snapshot, api_key_prefix_snapshot, captcha_id, risk_type,
 		       status, http_status, error_code, accepted_at, completed_at, duration_ms,
@@ -97,10 +105,10 @@ func ListCallsForUser(ctx context.Context, q Querier, userID uuid.UUID, cursor *
 		WHERE user_id = $1`
 	args := []any{userID}
 	if cursor != nil {
-		sql += ` AND accepted_at < $2`
-		args = append(args, *cursor)
+		sql += ` AND (accepted_at, request_id) < ($2, $3)`
+		args = append(args, cursor.AcceptedAt, cursor.RequestID)
 	}
-	sql += ` ORDER BY accepted_at DESC LIMIT $` + itoa(len(args)+1)
+	sql += ` ORDER BY accepted_at DESC, request_id DESC LIMIT $` + itoa(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := q.Query(ctx, sql, args...)

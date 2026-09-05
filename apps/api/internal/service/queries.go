@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -58,12 +57,12 @@ func (s *Services) GetUsage(ctx context.Context, userID uuid.UUID) (UsageReport,
 // CallsPage is one cursor page of the user's call log.
 type CallsPage struct {
 	Items      []store.CallRecord
-	NextCursor *time.Time
+	NextCursor *store.CallCursor
 }
 
 // ListCalls returns a redacted, owner-scoped call log page. limit is clamped
-// to [1,100]; the cursor is the previous page's last accepted_at.
-func (s *Services) ListCalls(ctx context.Context, userID uuid.UUID, cursor *time.Time, limit int) (CallsPage, *ApplicationError) {
+// to [1,100]; the cursor is the previous page's last stable sort boundary.
+func (s *Services) ListCalls(ctx context.Context, userID uuid.UUID, cursor *store.CallCursor, limit int) (CallsPage, *ApplicationError) {
 	if limit < 1 {
 		limit = 20
 	}
@@ -78,9 +77,12 @@ func (s *Services) ListCalls(ctx context.Context, userID uuid.UUID, cursor *time
 
 	page := CallsPage{Items: records}
 	if len(records) > limit {
-		// Drop the lookahead row and expose its accepted_at as the cursor.
+		// Drop the lookahead row and expose the final returned stable boundary.
 		records = records[:limit]
-		boundary := records[len(records)-1].AcceptedAt
+		boundary := store.CallCursor{
+			AcceptedAt: records[len(records)-1].AcceptedAt,
+			RequestID:  records[len(records)-1].RequestID,
+		}
 		page.NextCursor = &boundary
 		page.Items = records
 	}

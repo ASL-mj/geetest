@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/captchaflow/service-platform/api/internal/service"
@@ -99,6 +100,24 @@ func (s *Server) handleGetUsage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const callCursorSeparator = "~"
+
+func parseCallCursor(raw string) (*store.CallCursor, bool) {
+	acceptedAtRaw, requestID, ok := strings.Cut(raw, callCursorSeparator)
+	if !ok || acceptedAtRaw == "" || requestID == "" || len(requestID) > 64 {
+		return nil, false
+	}
+	acceptedAt, err := time.Parse(time.RFC3339Nano, acceptedAtRaw)
+	if err != nil {
+		return nil, false
+	}
+	return &store.CallCursor{AcceptedAt: acceptedAt, RequestID: requestID}, true
+}
+
+func formatCallCursor(cursor store.CallCursor) string {
+	return cursor.AcceptedAt.UTC().Format(time.RFC3339Nano) + callCursorSeparator + cursor.RequestID
+}
+
 // handleListCalls serves the owner-scoped call log with cursor pagination.
 func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	userID := *parseUUID(userFromContext(r).UserID)
@@ -112,14 +131,14 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	var cursor *time.Time
+	var cursor *store.CallCursor
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, raw)
-		if err != nil {
+		parsed, ok := parseCallCursor(raw)
+		if !ok {
 			writeApplicationError(w, errInvalidRequest)
 			return
 		}
-		cursor = &parsed
+		cursor = parsed
 	}
 
 	page, appErr := s.services.ListCalls(r.Context(), userID, cursor, limit)
@@ -133,7 +152,7 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	}
 	var nextCursor any
 	if page.NextCursor != nil {
-		nextCursor = page.NextCursor.UTC().Format(time.RFC3339Nano)
+		nextCursor = formatCallCursor(*page.NextCursor)
 	}
 	writeSuccess(w, newRequestID(), http.StatusOK, map[string]any{
 		"items":       items,
