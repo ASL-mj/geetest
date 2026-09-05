@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,8 +40,23 @@ func main() {
 	}
 	defer pool.Close()
 
+	if getEnvBool("AUTO_MIGRATE") {
+		if err := store.Migrate(ctx, pool); err != nil {
+			slog.Error("auto migrate failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("auto migrate applied")
+	}
+
 	services := service.NewServices(pool, settings)
 	bootstrapAdmin(ctx, services)
+	// Crash recovery: calls stuck RESERVED/DISPATCHED from a previous run are
+	// refunded exactly-once and finalized so no quota stays stranded.
+	if reaped, err := store.SweepStaleInFlightCalls(ctx, pool, 15*time.Minute); err != nil {
+		slog.Error("stale call sweep failed", "error", err)
+	} else if reaped > 0 {
+		slog.Info("reaped stale in-flight calls", "count", reaped)
+	}
 	limiter := ratelimit.New(ctx, settings)
 	gateway := solver.NewGateway(settings)
 	solveService := service.NewSolveService(pool, gateway, limiter, settings.SessionSecret)
@@ -95,6 +111,15 @@ func bootstrapAdmin(ctx context.Context, services *service.Services) {
 
 // resolveEnvFile prefers an explicit path, then the repository root .env,
 // then the working directory .env.
+// getEnvBool treats "1", "true", "yes" (any case) as enabled.
+func getEnvBool(key string) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
 func resolveEnvFile(explicit string) string {
 	if explicit != "" {
 		return explicit

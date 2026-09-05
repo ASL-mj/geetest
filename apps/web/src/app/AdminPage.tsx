@@ -213,7 +213,7 @@ function CdksSection() {
         <AdminDialog description="已复制到剪贴板；也可以在列表中随时再次复制。" onClose={() => setGenerated(null)} title="兑换码明文">
           <div className="secret-field"><code>{generated.join('\n')}</code></div>
           <div className="dialog__actions">
-            <button className="quiet-button" onClick={() => void navigator.clipboard?.writeText(generated.join('\n'))} type="button">复制全部</button>
+            <button className="quiet-button" onClick={() => navigator.clipboard?.writeText(generated.join('\n')).catch(() => {})} type="button">复制全部</button>
             <button className="primary-button" onClick={() => setGenerated(null)} type="button">完成</button>
           </div>
         </AdminDialog>

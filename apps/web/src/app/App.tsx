@@ -19,7 +19,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import './App.css';
 import { AdminPage } from './AdminPage';
@@ -232,6 +232,8 @@ const keyLimit = 5;
 function KeysPage() {
   const [keys, setKeys] = useState<APIKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [editTarget, setEditTarget] = useState<APIKey | null>(null);
   const [revealed, setRevealed] = useState<{ secret?: string; error?: string } | null>(null);
@@ -253,13 +255,29 @@ function KeysPage() {
   }, [reloadKey]);
 
   const toggle = async (key: APIKey) => {
-    await api.updateKey(key.id, { status: key.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' });
-    refresh();
+    setBusyKey(key.id);
+    setNotice(null);
+    try {
+      await api.updateKey(key.id, { status: key.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' });
+      refresh();
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '操作失败，请稍后重试。');
+    } finally {
+      setBusyKey(null);
+    }
   };
   const remove = async (key: APIKey) => {
     if (!window.confirm(`删除 API Key「${key.name}」？删除后不可恢复。`)) return;
-    await api.deleteKey(key.id);
-    refresh();
+    setBusyKey(key.id);
+    setNotice(null);
+    try {
+      await api.deleteKey(key.id);
+      refresh();
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '删除失败，请稍后重试。');
+    } finally {
+      setBusyKey(null);
+    }
   };
   const copySecret = async (key: APIKey) => {
     try {
@@ -287,6 +305,7 @@ function KeysPage() {
           action={<button className="primary-button" onClick={() => setShowCreate(true)} type="button"><Plus aria-hidden="true" size={17} />新建 API Key</button>}
         />
         <p className="key-count-hint">共 <b>{activeCount}</b> / {keyLimit} 个（所有 Key 共享 CDK 额度池）</p>
+        {notice && <p className="key-notice" role="alert">{notice}</p>}
         {keys === null
           ? <div className="empty-state"><RefreshCw aria-hidden="true" size={24} /><strong>正在加载…</strong></div>
           : keys.length === 0
@@ -309,10 +328,10 @@ function KeysPage() {
                         <td>
                           {key.status !== 'DELETED' && (
                             <div className="row-actions">
-                              <button className="action-link" onClick={() => void copySecret(key)} type="button">复制</button>
-                              <button className="action-link" onClick={() => setEditTarget(key)} type="button">编辑</button>
-                              <button className="action-link" onClick={() => void toggle(key)} type="button">{key.status === 'ACTIVE' ? '禁用' : '启用'}</button>
-                              <button className="action-link action-link--danger" onClick={() => void remove(key)} type="button">删除</button>
+                              <button className="action-link" disabled={busyKey === key.id} onClick={() => void copySecret(key)} type="button">复制</button>
+                              <button className="action-link" disabled={busyKey === key.id} onClick={() => setEditTarget(key)} type="button">编辑</button>
+                              <button className="action-link" disabled={busyKey === key.id} onClick={() => void toggle(key)} type="button">{key.status === 'ACTIVE' ? '禁用' : '启用'}</button>
+                              <button className="action-link action-link--danger" disabled={busyKey === key.id} onClick={() => void remove(key)} type="button">删除</button>
                             </div>
                           )}
                         </td>
@@ -339,6 +358,7 @@ function KeysPage() {
 }
 
 function EditKeyDialog({ apiKey, onClose, onSaved }: { apiKey: APIKey; onClose: () => void; onSaved: () => void }) {
+  useEscapeToClose(onClose);
   const [name, setName] = useState(apiKey.name);
   const [quotaLimit, setQuotaLimit] = useState(apiKey.quota_limit?.toString() ?? '');
   const [allowedIPs, setAllowedIPs] = useState(apiKey.allowed_ips ?? '');
@@ -387,6 +407,7 @@ function EditKeyDialog({ apiKey, onClose, onSaved }: { apiKey: APIKey; onClose: 
 }
 
 function CreateKeyDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  useEscapeToClose(onClose);
   const [name, setName] = useState('');
   const [secret, setSecret] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -546,18 +567,31 @@ function CallsPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  const loadingRef = useRef(false);
   const load = useCallback(async (after?: string) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setError(null);
     try {
       const envelope = await api.listCalls(after);
-      setPages((previous) => [...previous, envelope.data?.items ?? []]);
+      // The first page replaces (StrictMode/mount double-runs must not
+      // duplicate rows); cursor loads append.
+      if (after) {
+        setPages((previous) => [...previous, envelope.data?.items ?? []]);
+      } else {
+        setPages([envelope.data?.items ?? []]);
+      }
       setCursor(envelope.data?.next_cursor ?? null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '网络错误。');
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 
   useEffect(() => { void load(undefined); }, [load, reloadKey]);
+
+  useEscapeToClose(() => setDetail(null));
 
   const openDetail = async (requestId: string) => {
     try {
@@ -578,6 +612,7 @@ function CallsPage() {
         {flat.length === 0
           ? <div className="empty-state"><FileText aria-hidden="true" size={26} /><strong>暂无调用记录</strong></div>
           : <CallTable rows={flat} onOpen={(id) => void openDetail(id)} />}
+        {error && flat.length > 0 && <p className="field-hint" role="alert">{error}</p>}
         {cursor && <div className="pagination"><button className="quiet-button" onClick={() => void load(cursor)} type="button">加载更多</button></div>}
         {detail && (
           <div className="dialog-backdrop" role="presentation" onClick={() => setDetail(null)}>
@@ -707,6 +742,17 @@ function DocsPage() {
   );
 }
 
+/** Escape closes a modal; backdrop click is handled per-dialog. */
+function useEscapeToClose(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+}
+
 export function App() {
   // The URL is the single source of truth: refresh, back/forward and deep
   // links all resolve through the history router.
@@ -715,6 +761,14 @@ export function App() {
   // Session probe result for console routes: null = still checking. Admin
   // routes manage their own login gate inside AdminPage.
   const [consoleSession, setConsoleSession] = useState<'checking' | 'guest' | 'authenticated'>('checking');
+
+  // Any API 401 (expired/revoked session) forces a fresh probe; the console
+  // route then redirects to activation instead of endless load errors.
+  useEffect(() => {
+    const onUnauthorized = () => setSessionEpoch((value) => value + 1);
+    window.addEventListener('captchaflow:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('captchaflow:unauthorized', onUnauthorized);
+  }, []);
 
   // Probe the session on every named route so public headers can offer a
   // console shortcut too; navigation inside the console (same route name)

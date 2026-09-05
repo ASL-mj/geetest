@@ -97,22 +97,38 @@ func UpdateAPIKeyFields(ctx context.Context, q Querier, keyID uuid.UUID, name *s
 }
 
 // UpdateAPIKeyPolicy applies the operator-editable policy fields: display
-// name, per-key quota ceiling and the IP allowlist (nil keeps current).
+// name, per-key quota ceiling and the IP allowlist. nil keeps the current
+// value; explicit values (including 0 / empty string = unlimited) replace it.
 func UpdateAPIKeyPolicy(ctx context.Context, q Querier, keyID uuid.UUID, name *string, quotaLimit *int64, allowedIPs *string) error {
 	_, err := q.Exec(ctx, `
 		UPDATE api_keys
 		SET name        = COALESCE($2, name),
-		    quota_limit = $3,
-		    allowed_ips = $4
+		    quota_limit = COALESCE($3, quota_limit),
+		    allowed_ips = COALESCE($4, allowed_ips)
 		WHERE id = $1
 	`, keyID, name, quotaLimit, allowedIPs)
 	return err
 }
 
-// IncrementAPIKeyUsage counts one confirmed success against the key so
-// per-key quota ceilings can be enforced.
-func IncrementAPIKeyUsage(ctx context.Context, q Querier, keyID uuid.UUID) error {
-	_, err := q.Exec(ctx, `UPDATE api_keys SET total_calls = total_calls + 1 WHERE id = $1`, keyID)
+// ConsumeAPIKeyQuota is the atomic admission gate for per-key ceilings:
+// one conditional UPDATE admits the call or refuses it, so concurrent
+// solves cannot overshoot the limit. A NULL/negative-or-zero limit is
+// unlimited (the UI documents 0 as 不限).
+func ConsumeAPIKeyQuota(ctx context.Context, q Querier, keyID uuid.UUID) (bool, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE api_keys SET total_calls = total_calls + 1
+		WHERE id = $1 AND (quota_limit IS NULL OR quota_limit <= 0 OR total_calls < quota_limit)
+	`, keyID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseAPIKeyQuota rolls the admission gate back for a call that failed
+// after admission, keeping total_calls equal to settled successes.
+func ReleaseAPIKeyQuota(ctx context.Context, q Querier, keyID uuid.UUID) error {
+	_, err := q.Exec(ctx, `UPDATE api_keys SET total_calls = GREATEST(total_calls - 1, 0) WHERE id = $1`, keyID)
 	return err
 }
 

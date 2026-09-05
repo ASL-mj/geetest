@@ -38,6 +38,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<Envelop
     throw new ApiError(response.status, 'NETWORK_ERROR', '响应不是有效的 JSON。', '');
   }
   if (!response.ok || !payload.success) {
+    // Session expiry mid-console: broadcast so the shell can re-probe and
+    // route the user back to activation instead of endless load errors.
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent('captchaflow:unauthorized'));
+    }
     const error = payload.error ?? { code: 'UNKNOWN', message: '未知错误。', retryable: false };
     throw new ApiError(response.status, error.code, error.message, payload.request_id ?? '');
   }
@@ -113,15 +118,22 @@ export interface ActivationResult {
  */
 let docsBaseURL: string | null = null;
 export async function getDocsBaseURL(): Promise<string> {
+  // Only successful lookups are cached; a transient meta failure falls back
+  // to the current origin and retries on the next call.
   if (docsBaseURL !== null) return docsBaseURL;
   try {
     const envelope = await meta();
     const configured = envelope.data?.api_base_url?.trim();
     docsBaseURL = configured ? configured : window.location.origin;
   } catch {
-    docsBaseURL = window.location.origin;
+    return window.location.origin;
   }
   return docsBaseURL;
+}
+
+/** Clears the cached display URL after an operator updates it. */
+export function resetDocsBaseURLCache(): void {
+  docsBaseURL = null;
 }
 
 // ---------- user session ----------

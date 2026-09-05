@@ -70,7 +70,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		CaptchaID string `json:"captcha_id"`
 		RiskType  string `json:"risk_type"`
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil || json.Unmarshal(body, &payload) != nil {
 		writeApplicationError(w, service.ErrInvalidRequest())
 		return
@@ -81,13 +81,14 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, clientIPHash := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	sourceIP := clientIP(r, s.trustedProxyHops)
+	clientIP, clientIPHash := maskAndHashIP(sourceIP, s.services.Settings.SessionSecret)
 	if caller.APIKey.AllowedIPs != nil && *caller.APIKey.AllowedIPs != "" {
-		if rawIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			if !crypto.IPAllowed(rawIP, *caller.APIKey.AllowedIPs) {
-				writeApplicationError(w, service.ErrKeyIPForbidden())
-				return
-			}
+		// Fail closed: an unparsable source with an allowlist configured
+		// must never slip through.
+		if net.ParseIP(sourceIP) == nil || !crypto.IPAllowed(sourceIP, *caller.APIKey.AllowedIPs) {
+			writeApplicationError(w, service.ErrKeyIPForbidden())
+			return
 		}
 	}
 	outcome := s.solve.Solve(r.Context(), service.SolveInput{
@@ -153,13 +154,14 @@ func (s *Server) handleConsoleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, clientIPHash := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	sourceIP := clientIP(r, s.trustedProxyHops)
+	clientIP, clientIPHash := maskAndHashIP(sourceIP, s.services.Settings.SessionSecret)
 	if caller.APIKey.AllowedIPs != nil && *caller.APIKey.AllowedIPs != "" {
-		if rawIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			if !crypto.IPAllowed(rawIP, *caller.APIKey.AllowedIPs) {
-				writeApplicationError(w, service.ErrKeyIPForbidden())
-				return
-			}
+		// Fail closed: an unparsable source with an allowlist configured
+		// must never slip through.
+		if net.ParseIP(sourceIP) == nil || !crypto.IPAllowed(sourceIP, *caller.APIKey.AllowedIPs) {
+			writeApplicationError(w, service.ErrKeyIPForbidden())
+			return
 		}
 	}
 	outcome := s.solve.Solve(r.Context(), service.SolveInput{

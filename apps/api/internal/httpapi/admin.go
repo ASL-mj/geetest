@@ -70,7 +70,7 @@ func adminFromContext(r *http.Request) service.AdminSession {
 
 // auditIP reuses the platform masking for the operator source address.
 func (s *Server) auditIP(r *http.Request) string {
-	masked, _ := maskAndHashIP(r.RemoteAddr, s.services.Settings.SessionSecret)
+	masked, _ := maskAndHashIP(clientIP(r, s.trustedProxyHops), s.services.Settings.SessionSecret)
 	return masked
 }
 
@@ -324,7 +324,7 @@ func (s *Server) handleAdminRevealCdkCode(w http.ResponseWriter, r *http.Request
 		writeApplicationError(w, service.ErrInvalidRequest())
 		return
 	}
-	code, appErr := s.services.RevealCdkCode(r.Context(), *cdkID)
+	code, appErr := s.services.RevealCdkCode(r.Context(), adminFromContext(r), *cdkID, s.auditIP(r))
 	if appErr != nil {
 		writeApplicationError(w, appErr)
 		return

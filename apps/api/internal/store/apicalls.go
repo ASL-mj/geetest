@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // API call lifecycle states per the V1 state model.
@@ -182,4 +184,54 @@ func CompleteAPICallFailure(ctx context.Context, q Querier, callID uuid.UUID, ht
 		WHERE id = $1
 	`, callID, CallStatusFailedRefunded, httpStatus, errorCode, errorSummary, refunded, duration.Milliseconds())
 	return err
+}
+
+// SweepStaleInFlightCalls fails calls stuck in RESERVED/DISPATCHED for
+// longer than olderThan (crash recovery): each is refunded exactly once,
+// its per-key admission gate released, and the row finalized. Returns the
+// number of reaped rows.
+func SweepStaleInFlightCalls(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, cdk_id, user_id, api_key_id, request_id, quota_reserved
+		FROM api_calls
+		WHERE status IN ('RESERVED', 'DISPATCHED') AND accepted_at < now() - make_interval(secs => $1)
+	`, olderThan.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	type stale struct {
+		id, cdkID, userID, keyID uuid.UUID
+		requestID                string
+		reserved                 bool
+	}
+	var pending []stale
+	for rows.Next() {
+		var call stale
+		if err := rows.Scan(&call.id, &call.cdkID, &call.userID, &call.keyID, &call.requestID, &call.reserved); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pending = append(pending, call)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	reaped := 0
+	for _, call := range pending {
+		if call.reserved {
+			if err := RefundQuota(ctx, pool, call.cdkID, call.userID, call.id, call.requestID, "stale call sweep refund"); err != nil {
+				return reaped, err
+			}
+		}
+		if call.keyID != uuid.Nil {
+			_ = ReleaseAPIKeyQuota(ctx, pool, call.keyID)
+		}
+		if err := CompleteAPICallFailure(ctx, pool, call.id, http.StatusGatewayTimeout, "SWEEP_TIMEOUT", "Stale in-flight call was reaped and refunded.", call.reserved, 0); err != nil {
+			return reaped, err
+		}
+		reaped++
+	}
+	return reaped, nil
 }

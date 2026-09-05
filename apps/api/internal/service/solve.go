@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/ratelimit"
@@ -43,7 +44,7 @@ type SolveGateway interface {
 // idempotency -> rate -> concurrency -> quota reserve -> solver -> settle.
 // It owns no HTTP concerns; the transport renders SolveOutcome.
 type SolveService struct {
-	pool      store.Querier
+	pool      *pgxpool.Pool
 	gateway   SolveGateway
 	limiter   ratelimit.Limiter
 	operation string
@@ -53,7 +54,7 @@ type SolveService struct {
 // NewSolveService wires the orchestration dependencies. The pepper scopes
 // idempotency-key hashing; any server-side pepper works because scoping to
 // the user and operation comes from the api_calls unique constraint.
-func NewSolveService(pool store.Querier, gateway SolveGateway, limiter ratelimit.Limiter, pepper string) *SolveService {
+func NewSolveService(pool *pgxpool.Pool, gateway SolveGateway, limiter ratelimit.Limiter, pepper string) *SolveService {
 	return &SolveService{pool: pool, gateway: gateway, limiter: limiter, operation: "captcha.solve", pepper: pepper}
 }
 
@@ -135,9 +136,21 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 		_ = s.limiter.ReleaseConc(context.Background(), caller.CDKID.String(), requestID)
 	}()
 
+	// Per-key ceiling: the conditional UPDATE is the admission gate, so
+	// concurrent solves can never overshoot a configured limit.
+	admitted, err := store.ConsumeAPIKeyQuota(ctx, s.pool, caller.APIKeyID)
+	if err != nil {
+		slog.Error("key quota gate failed", "error", err)
+		return s.reject(ctx, record, 500, "INTERNAL_ERROR", "Internal server error.", 0)
+	}
+	if !admitted {
+		return s.reject(ctx, record, 402, "KEY_QUOTA_EXHAUSTED", "该 API Key 的额度上限已用完，请调整限额或更换 Key。", 0)
+	}
+
 	// Quota pre-deduction with RESERVE ledger row; the conditional UPDATE is
 	// the admission gate so exhausted CDKs never reach the solver.
 	if err := store.ReserveQuota(ctx, s.pool, caller.CDKID, caller.UserID, callID, requestID, "solve reserve"); err != nil {
+		_ = store.ReleaseAPIKeyQuota(ctx, s.pool, caller.APIKeyID)
 		if errors.Is(err, store.ErrQuotaExhausted) {
 			return s.reject(ctx, record, 402, "QUOTA_EXHAUSTED", "No remaining quota.", 0)
 		}
@@ -171,26 +184,30 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 		responseJSON = json.RawMessage(`{}`)
 	}
 
-	if err := store.ConfirmQuota(ctx, s.pool, caller.CDKID, caller.UserID, callID, requestID, "solve confirm"); err != nil {
+	// Settlement runs detached from the request context: a client that hangs
+	// up mid-solve must never strand a reserved unit or a DISPATCHED row.
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := store.ConfirmQuota(settleCtx, s.pool, caller.CDKID, caller.UserID, callID, requestID, "solve confirm"); err != nil {
 		// Success is already committed toward the user; ledger inconsistency
 		// is logged for reconciliation rather than failing the response.
 		slog.Error("quota confirm failed", "request_id", requestID, "error", err)
 	}
-	if err := store.CompleteAPICallSuccess(ctx, s.pool, callID, duration); err != nil {
+	if err := store.CompleteAPICallSuccess(settleCtx, s.pool, callID, duration); err != nil {
 		slog.Error("complete success failed", "request_id", requestID, "error", err)
 	}
-	if err := store.IncrementAPIKeyUsage(ctx, s.pool, caller.APIKeyID); err != nil {
-		slog.Error("increment key usage failed", "request_id", requestID, "error", err)
-	}
+
 	if err := store.SaveIdempotencyResponse(ctx, s.pool, callID, caller.UserID, responseJSON); err != nil {
 		slog.Error("save idempotency response failed", "request_id", requestID, "error", err)
 	}
 	return SolveOutcome{RequestID: requestID, Result: result}
 }
 
-// replayOutcome serves a stored terminal response or flags in-progress.
+// replayOutcome serves stored terminal responses (spec §7.3.2) or flags a
+// call that is genuinely still in progress.
 func (s *SolveService) replayOutcome(existing store.APICall) SolveOutcome {
-	if existing.Status == store.CallStatusSucceeded {
+	switch existing.Status {
+	case store.CallStatusSucceeded:
 		payload, err := store.GetIdempotencyResponse(context.Background(), s.pool, existing.ID)
 		if err == nil {
 			var result solver.SolveResult
@@ -200,9 +217,34 @@ func (s *SolveService) replayOutcome(existing store.APICall) SolveOutcome {
 		} else if !errors.Is(err, store.ErrNotFound) {
 			slog.Error("idempotency response lookup failed", "request_id", existing.RequestID, "error", err)
 		}
+	case store.CallStatusRejected:
+		// A rejected call never consumed quota and is terminal: replay its
+		// stored status so clients honoring Retry-After can move on (or get
+		// the same refusal instead of an endless 409).
+		return SolveOutcome{RequestID: existing.RequestID, SolveError: &SolveError{
+			HTTPStatus: existing.HTTPStatus,
+			Code:       derefOr(existing.ErrorCode, "REJECTED"),
+			Message:    derefOr(existing.ErrorSummary, "The original request was rejected."),
+		}}
+	case store.CallStatusFailedRefunded:
+		// Solver failures are terminal too: the refund already happened.
+		// Retrying the same operation requires a fresh Idempotency-Key.
+		return SolveOutcome{RequestID: existing.RequestID, SolveError: &SolveError{
+			HTTPStatus: existing.HTTPStatus,
+			Code:       derefOr(existing.ErrorCode, "UPSTREAM_ERROR"),
+			Message:    derefOr(existing.ErrorSummary, "The original request failed and its quota was refunded."),
+		}}
 	}
 	// RECEIVED/RESERVED/DISPATCHED or unusable payload: still executing.
 	return SolveOutcome{RequestID: existing.RequestID, SolveError: ErrConflictReplay}
+}
+
+// settleFailure refunds and finalizes on a detached context so a client
+// disconnect cannot strand the reserved unit (spec: exactly-once refund).
+func (s *SolveService) settleFailure(ctx context.Context, record store.APICall, solveErr error, duration time.Duration) SolveOutcome {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return s.settleFailureContext(detached, record, solveErr, duration)
 }
 
 // reject finalizes a call that never reserved quota.
@@ -221,10 +263,14 @@ func (s *SolveService) reject(ctx context.Context, record store.APICall, httpSta
 	}
 }
 
-// settleFailure refunds the reserved unit exactly once and persists the
-// failure. The ledger unique constraint makes repeated refunds a no-op.
-func (s *SolveService) settleFailure(ctx context.Context, record store.APICall, solveErr error, duration time.Duration) SolveOutcome {
+// settleFailureContext performs the actual refund + failure persistence on
+// whatever context it is given (callers own cancellation policy).
+func (s *SolveService) settleFailureContext(ctx context.Context, record store.APICall, solveErr error, duration time.Duration) SolveOutcome {
 	httpStatus, code, message := mapSolverError(solveErr)
+	// The admission gate was consumed for this call; failures give it back.
+	if err := store.ReleaseAPIKeyQuota(ctx, s.pool, record.APIKeyID); err != nil {
+		slog.Error("release key quota failed", "request_id", record.RequestID, "error", err)
+	}
 
 	refundErr := store.RefundQuota(ctx, s.pool, record.CDKID, record.UserID, record.ID, record.RequestID, "solve refund")
 	refunded := refundErr == nil
@@ -242,6 +288,14 @@ func (s *SolveService) settleFailure(ctx context.Context, record store.APICall, 
 			Message:    message,
 		},
 	}
+}
+
+// derefOr returns the string behind a nullable column or the fallback.
+func derefOr(value *string, fallback string) string {
+	if value != nil && *value != "" {
+		return *value
+	}
+	return fallback
 }
 
 // mapSolverError renders gateway failures into stable platform codes.

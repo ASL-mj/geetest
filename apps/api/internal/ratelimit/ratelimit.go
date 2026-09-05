@@ -87,9 +87,17 @@ type RedisLimiter struct {
 	now func() time.Time
 }
 
-// New connects to the Redis URL; the limiter fails open when unusable.
+// New connects to the Redis URL; the limiter fails open when unusable. The
+// URL is parsed with redis.ParseURL so credentials and DB numbers actually
+// reach the connection — a hand-stripped addr used to silently disable all
+// admission control the moment a password was configured.
 func New(ctx context.Context, settings config.Settings) *RedisLimiter {
-	client := redis.NewClient(&redis.Options{Addr: addrFromURL(settings.RedisURL)})
+	options, err := redis.ParseURL(settings.RedisURL)
+	if err != nil {
+		slog.Error("invalid REDIS_URL; admission control fails open", "error", err)
+		return NewFromClient(redis.NewClient(&redis.Options{Addr: "localhost:6379"}), settings)
+	}
+	client := redis.NewClient(options)
 	if err := client.Ping(ctx).Err(); err != nil {
 		slog.Warn("redis unavailable; admission control fails open", "error", err)
 	}
@@ -105,27 +113,6 @@ func NewFromClient(client *redis.Client, settings config.Settings) *RedisLimiter
 		leaseTTL:    settings.SolverTotalTimeout + 10*time.Second,
 		now:         time.Now,
 	}
-}
-
-// addrFromURL reduces redis://host:port[/db] to host:port for go-redis.
-func addrFromURL(raw string) string {
-	const prefix = "redis://"
-	if len(raw) >= len(prefix) && raw[:len(prefix)] == prefix {
-		raw = raw[len(prefix):]
-	}
-	if at := indexOf(raw, "/"); at >= 0 {
-		raw = raw[:at]
-	}
-	return raw
-}
-
-func indexOf(s, needle string) int {
-	for i := 0; i+len(needle) <= len(s); i++ {
-		if s[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }
 
 // AllowRate consumes one token from the CDK bucket; retryAfter is the window

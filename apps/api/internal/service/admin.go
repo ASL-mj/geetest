@@ -192,8 +192,10 @@ func (s *Services) CreateCdkBatch(ctx context.Context, admin AdminSession, reque
 	return result, nil
 }
 
-// RevealCdkCode decrypts a CDK's sealed plaintext for operators.
-func (s *Services) RevealCdkCode(ctx context.Context, cdkID uuid.UUID) (string, *ApplicationError) {
+// RevealCdkCode decrypts a CDK's sealed plaintext for operators. The
+// disclosure itself is audited: it is the most sensitive read on the
+// platform and admin-role-only by route guard.
+func (s *Services) RevealCdkCode(ctx context.Context, admin AdminSession, cdkID uuid.UUID, ipMasked string) (string, *ApplicationError) {
 	sealed, err := store.GetCdkCiphertext(ctx, s.Pool, cdkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -205,6 +207,12 @@ func (s *Services) RevealCdkCode(ctx context.Context, cdkID uuid.UUID) (string, 
 	code, err := crypto.Open(s.Settings.SessionSecret, sealed)
 	if err != nil {
 		return "", NewError(422, "CDK_CODE_UNAVAILABLE", "该 CDK 缺少可恢复的密文，无法再次显示。")
+	}
+	if auditErr := store.RunInTx(ctx, s.Pool, func(ctx context.Context, q store.Querier) error {
+		return recordAudit(ctx, q, admin, "cdk.code_revealed", "cdk", cdkID, nil,
+			map[string]any{"code_prefix_len": 8}, "查看兑换码明文", ipMasked)
+	}); auditErr != nil {
+		slog.Error("reveal cdk audit failed", "error", auditErr)
 	}
 	return code, nil
 }

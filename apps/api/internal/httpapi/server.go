@@ -6,10 +6,10 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
-	"log/slog"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/captchaflow/service-platform/api/internal/crypto"
 	"github.com/captchaflow/service-platform/api/internal/service"
@@ -21,8 +21,11 @@ var webFS embed.FS
 
 // Server carries the shared dependencies for all handlers.
 type Server struct {
-	services *service.Services
-	solve    *service.SolveService
+	services         *service.Services
+	solve            *service.SolveService
+	trustedProxyHops int
+	adminLoginGate   *ipWindowLimiter
+	activateGate     *ipWindowLimiter
 }
 
 // NewRouter builds the V1 route table. Go 1.22+ ServeMux patterns provide
@@ -31,11 +34,19 @@ type Server struct {
 // When a web build is embedded (deploy images), unmatched GETs fall back to
 // the SPA so history routes like /console/keys survive a hard refresh.
 func NewRouter(services *service.Services, solve *service.SolveService) http.Handler {
-	server := &Server{services: services, solve: solve}
+	server := &Server{
+		services:         services,
+		solve:            solve,
+		trustedProxyHops: services.Settings.TrustedProxyHops,
+		// Unauthenticated hot spots get a small per-IP fixed window: admin
+		// login is also a CPU amplifier (Argon2id), activation hammers the DB.
+		adminLoginGate: newIPWindowLimiter(10, time.Minute),
+		activateGate:   newIPWindowLimiter(30, time.Minute),
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", server.handleHealthz)
-	mux.HandleFunc("POST /v1/auth/activate", server.handleActivate)
+	mux.HandleFunc("POST /v1/auth/activate", server.requireThrottle(server.activateGate, server.handleActivate))
 	mux.HandleFunc("POST /v1/auth/logout", server.requireUserSession(server.handleLogout))
 	mux.HandleFunc("POST /v1/keys", server.requireUserSession(server.handleCreateKey))
 	mux.HandleFunc("GET /v1/keys", server.requireUserSession(server.handleListKeys))
@@ -52,7 +63,7 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	}
 
 	// Administrator surface: /admin/v1 with its own session cookie and RBAC.
-	mux.HandleFunc("POST /admin/v1/auth/login", server.handleAdminLogin)
+	mux.HandleFunc("POST /admin/v1/auth/login", server.requireThrottle(server.adminLoginGate, server.handleAdminLogin))
 	mux.HandleFunc("POST /admin/v1/auth/logout", server.requireAdminAny(server.handleAdminLogout))
 	mux.HandleFunc("GET /admin/v1/dashboard", server.requireAdminAny(server.handleAdminDashboard))
 	mux.HandleFunc("POST /admin/v1/cdk-batches", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminCreateBatch))
@@ -64,7 +75,7 @@ func NewRouter(services *service.Services, solve *service.SolveService) http.Han
 	mux.HandleFunc("PATCH /admin/v1/users/{user_id}", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetUserStatus))
 	mux.HandleFunc("GET /admin/v1/audit-logs", server.requireAdminAny(server.handleAdminListAuditLogs))
 	mux.HandleFunc("GET /admin/v1/solver-health", server.requireAdminAny(server.handleAdminSolverHealth))
-	mux.HandleFunc("GET /admin/v1/cdks/{cdk_id}/code", server.requireAdminAny(server.handleAdminRevealCdkCode))
+	mux.HandleFunc("GET /admin/v1/cdks/{cdk_id}/code", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminRevealCdkCode))
 	mux.HandleFunc("PATCH /admin/v1/cdks/{cdk_id}/remark", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetCdkRemark))
 	mux.HandleFunc("GET /admin/v1/system/config", server.requireAdminAny(server.handleAdminGetSystemConfig))
 	mux.HandleFunc("PUT /admin/v1/system/config", server.requireAdminSession(store.AdminRoleAdmin)(server.handleAdminSetSystemConfig))
@@ -122,7 +133,8 @@ func spaHandlerFor(files fs.FS) http.HandlerFunc {
 // surface (which must never fall back to the web console). /admin itself is
 // an SPA route; only the /admin/v1 API namespace is excluded.
 func isAPIPath(p string) bool {
-	return p == "/healthz" || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/admin/v1/")
+	return p == "/healthz" || p == "/v1" || p == "/admin/v1" ||
+		strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/admin/v1/")
 }
 
 // handleHealthz is a public liveness probe; it must not check the solver.
@@ -169,13 +181,15 @@ func writeApplicationError(w http.ResponseWriter, appErr *service.ApplicationErr
 	})
 }
 
-func (s *Server) writeInternalError(w http.ResponseWriter, err error, context string) {
-	slog.Error(context, "error", err)
-	writeApplicationError(w, service.NewError(500, "INTERNAL_ERROR", "Internal server error."))
-}
+// maxBodyBytes bounds every JSON body (1 MiB is far above any platform
+// payload) so unauthenticated endpoints can never stream unbounded input
+// into memory.
+const maxBodyBytes = 1 << 20
 
-// decodeJSON reads a JSON body; every transport problem is a 422.
+// decodeJSON reads a JSON body; every transport problem is a 422 and an
+// oversized body is rejected before it can be buffered.
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(target); err != nil {
 		writeApplicationError(w, service.ErrInvalidRequest())

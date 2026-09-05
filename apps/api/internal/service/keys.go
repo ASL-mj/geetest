@@ -307,6 +307,9 @@ func validateEffectiveCaller(key domain.APIKey, user domain.User, cdk domain.Cdk
 	if cdk.QuotaRemaining <= 0 {
 		return ErrQuotaExhausted()
 	}
+	// The authoritative per-key ceiling is the conditional gate in the solve
+	// path (ConsumeAPIKeyQuota); the snapshot check here only fast-fails
+	// obviously exhausted keys before any rows are written.
 	if key.QuotaLimit != nil && *key.QuotaLimit > 0 && key.TotalCalls >= *key.QuotaLimit {
 		return ErrKeyQuotaExhausted()
 	}

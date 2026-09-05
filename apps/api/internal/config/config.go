@@ -38,6 +38,7 @@ type Settings struct {
 	SolverReadTimeout    time.Duration
 	SolverTotalTimeout   time.Duration
 	RateLimitPerMinute   int
+	TrustedProxyHops     int
 	ConcurrencyLimit     int
 
 	AdminSessionTTL time.Duration
@@ -66,6 +67,7 @@ func Load(envFile string) (Settings, error) {
 		SolverReadTimeout:    time.Duration(getEnvInt("SOLVER_READ_TIMEOUT_SECONDS", 120)) * time.Second,
 		SolverTotalTimeout:   time.Duration(getEnvInt("SOLVER_TOTAL_TIMEOUT_SECONDS", 130)) * time.Second,
 		RateLimitPerMinute:   getEnvInt("RATE_LIMIT_PER_MINUTE", 60),
+		TrustedProxyHops:     getEnvInt("TRUST_PROXY_XFF_HOPS", 0),
 		ConcurrencyLimit:     getEnvInt("CONCURRENCY_LIMIT", 4),
 
 		AdminSessionTTL: time.Duration(getEnvInt("ADMIN_SESSION_TTL_SECONDS", 86400)) * time.Second,
