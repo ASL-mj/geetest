@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/captchaflow/service-platform/api/internal/crypto"
+	"github.com/captchaflow/service-platform/api/internal/domain"
 	"github.com/captchaflow/service-platform/api/internal/store"
 )
 
@@ -222,6 +224,26 @@ func TestAdminDisablesCdkAndUser(t *testing.T) {
 	status, payload = decodeEnvelope(t, base.do("GET", "/v1/account", "", userCookie))
 	if status == http.StatusOK {
 		t.Fatalf("suspended user session must stop resolving: %d %v", status, payload)
+	}
+}
+
+func TestAdminEnableExpiredUnboundCdkKeepsExpiredStatus(t *testing.T) {
+	base := newHarness(t)
+	seedAdmin(t, base, "expiry-admin", store.AdminRoleAdmin)
+	admin := adminLogin(t, base, "expiry-admin")
+	past := time.Now().UTC().Add(-time.Hour)
+	cdk, _ := base.seedCDK(func(c *domain.Cdk) {
+		c.Status = domain.CDKStatusDisabled
+		c.ActivationDeadline = &past
+	})
+
+	status, payload := decodeEnvelope(t, base.do("PATCH", fmt.Sprintf("/admin/v1/cdks/%s", cdk.ID), `{"status":"ACTIVE","reason":"reopen review"}`, admin))
+	if status != http.StatusOK {
+		t.Fatalf("enable expired cdk failed: %d %v", status, payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data["status"] != "EXPIRED" {
+		t.Fatalf("expired unbound cdk must remain expired when enabled: %v", data)
 	}
 }
 

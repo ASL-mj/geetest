@@ -379,9 +379,10 @@ func (s *Services) SetCdkEnabled(ctx context.Context, admin AdminSession, cdkID 
 		var previousStatus string
 		var remaining int64
 		var boundUserID *uuid.UUID
+		var activationDeadline *time.Time
 		var expiresAt *time.Time
-		err := q.QueryRow(ctx, `SELECT status, quota_remaining, bound_user_id, expires_at FROM cdks WHERE id = $1`, cdkID).
-			Scan(&previousStatus, &remaining, &boundUserID, &expiresAt)
+		err := q.QueryRow(ctx, `SELECT status, quota_remaining, bound_user_id, activation_deadline, expires_at FROM cdks WHERE id = $1`, cdkID).
+			Scan(&previousStatus, &remaining, &boundUserID, &activationDeadline, &expiresAt)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
 				return ErrCDKNotFound()
@@ -395,7 +396,11 @@ func (s *Services) SetCdkEnabled(ctx context.Context, admin AdminSession, cdkID 
 			// restoring it to ACTIVE would make activation impossible because
 			// the activation path only accepts UNACTIVATED.
 			if boundUserID == nil {
-				status = "UNACTIVATED"
+				if activationDeadline != nil && !activationDeadline.After(time.Now().UTC()) {
+					status = "EXPIRED"
+				} else {
+					status = "UNACTIVATED"
+				}
 			} else if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
 				status = "EXPIRED"
 			}
