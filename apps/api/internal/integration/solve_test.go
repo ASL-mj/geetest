@@ -270,6 +270,35 @@ func TestSolveRefundsExactlyOnceOnSolverFailure(t *testing.T) {
 	}
 }
 
+func TestSolveNilSolverResultRefundsQuota(t *testing.T) {
+	h := newSolveHarness(t, func(ctx context.Context, requestID string, req solver.SolveRequest) (*solver.SolveResult, error) {
+		return nil, nil
+	})
+	secret := h.activateUser()
+
+	resp := h.post(secret, "idem-nil-result", `{"captcha_id":"cap-1","risk_type":"slide"}`)
+	status, payload := decodeEnvelope(t, resp)
+	if status != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %v", status, payload)
+	}
+	expectError(t, payload, "SOLVER_FAILED")
+	errBody, _ := payload["error"].(map[string]any)
+	if retryable, _ := errBody["retryable"].(bool); !retryable {
+		t.Fatalf("nil solver result should be retryable: %v", errBody)
+	}
+	var remaining, used, reserved int64
+	if err := h.h.services.Pool.QueryRow(context.Background(),
+		`SELECT quota_remaining, quota_used, quota_reserved FROM cdks LIMIT 1`).Scan(&remaining, &used, &reserved); err != nil {
+		t.Fatalf("quota lookup: %v", err)
+	}
+	if remaining != 100 || used != 0 || reserved != 0 {
+		t.Fatalf("nil result must refund exactly once: remaining=%d used=%d reserved=%d", remaining, used, reserved)
+	}
+	if got := ledgerCount(t, h.h, "REFUND"); got != 1 {
+		t.Fatalf("expected exactly one refund, got %d", got)
+	}
+}
+
 func TestSolveRateLimitedWritesNoLedger(t *testing.T) {
 	base := newHarness(t)
 
@@ -314,6 +343,9 @@ func TestSolveRateLimitedWritesNoLedger(t *testing.T) {
 		t.Fatalf("second call must be rate limited, got %d: %v", status, payload)
 	}
 	expectError(t, payload, "RATE_LIMITED")
+	if errBody, _ := payload["error"].(map[string]any); errBody == nil || errBody["retryable"] != true {
+		t.Fatalf("rate limit must be marked retryable: %v", payload)
+	}
 	if second.Header.Get("Retry-After") == "" {
 		t.Fatal("429 must carry Retry-After")
 	}
@@ -382,6 +414,7 @@ func TestSolveValidatesRequestAndAuth(t *testing.T) {
 		{"empty captcha id", secret, "idem-c", `{"captcha_id": "", "risk_type": "slide"}`, 422, "INVALID_REQUEST"},
 		{"wrong risk type", secret, "idem-d", `{"captcha_id": "c", "risk_type": "recaptcha"}`, 422, "INVALID_REQUEST"},
 		{"bad json", secret, "idem-e", `{not-json`, 422, "INVALID_REQUEST"},
+		{"trailing json", secret, "idem-f", `{"captcha_id":"c","risk_type":"slide"}{}`, 422, "INVALID_REQUEST"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

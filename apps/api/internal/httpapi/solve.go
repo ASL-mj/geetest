@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -70,9 +68,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		CaptchaID string `json:"captcha_id"`
 		RiskType  string `json:"risk_type"`
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil || json.Unmarshal(body, &payload) != nil {
-		writeApplicationError(w, service.ErrInvalidRequest())
+	if !decodeJSON(w, r, &payload) {
 		return
 	}
 	captchaID := strings.TrimSpace(payload.CaptchaID)
@@ -108,8 +104,9 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 			Success:   false,
 			RequestID: firstNonEmpty(outcome.RequestID, newRequestID()),
 			Error: errorBody{
-				Code:    outcome.SolveError.Code,
-				Message: outcome.SolveError.Message,
+				Code:      outcome.SolveError.Code,
+				Message:   outcome.SolveError.Message,
+				Retryable: outcome.SolveError.Retryable,
 			},
 		})
 		return
@@ -178,8 +175,9 @@ func (s *Server) handleConsoleSolve(w http.ResponseWriter, r *http.Request) {
 			Success:   false,
 			RequestID: firstNonEmpty(outcome.RequestID, newRequestID()),
 			Error: errorBody{
-				Code:    outcome.SolveError.Code,
-				Message: outcome.SolveError.Message,
+				Code:      outcome.SolveError.Code,
+				Message:   outcome.SolveError.Message,
+				Retryable: outcome.SolveError.Retryable,
 			},
 		})
 		return

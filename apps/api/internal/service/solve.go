@@ -22,10 +22,11 @@ type SolveError struct {
 	Code       string
 	Message    string
 	RetryAfter time.Duration
+	Retryable  bool
 }
 
 // ErrConflictReplay marks an in-flight idempotent duplicate (409).
-var ErrConflictReplay = &SolveError{HTTPStatus: 409, Code: "IDEMPOTENCY_IN_PROGRESS", Message: "An identical request is already in progress."}
+var ErrConflictReplay = &SolveError{HTTPStatus: 409, Code: "IDEMPOTENCY_IN_PROGRESS", Message: "An identical request is already in progress.", Retryable: true}
 
 // SolveOutcome is the result of one admitted call.
 type SolveOutcome struct {
@@ -82,7 +83,7 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 		// Fresh call: continue below.
 	default:
 		slog.Error("idempotency lookup failed", "error", err)
-		return SolveOutcome{SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error."}}
+		return SolveOutcome{SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error.", Retryable: true}}
 	}
 
 	requestID := crypto.NewRequestID()
@@ -112,7 +113,7 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 			return SolveOutcome{RequestID: requestID, SolveError: ErrConflictReplay}
 		}
 		slog.Error("create api call failed", "error", err)
-		return SolveOutcome{SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error."}}
+		return SolveOutcome{SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error.", Retryable: true}}
 	}
 
 	// Rate limit (per CDK per minute); Redis failure fails open.
@@ -174,6 +175,9 @@ func (s *SolveService) Solve(ctx context.Context, input SolveInput) SolveOutcome
 	if solveErr != nil {
 		return s.settleFailure(ctx, record, solveErr, duration)
 	}
+	if result == nil {
+		return s.settleFailure(ctx, record, solver.ErrSolverBad, duration)
+	}
 
 	responseJSON, err := json.Marshal(map[string]any{
 		"captcha_id":     result.CaptchaID,
@@ -222,7 +226,7 @@ func (s *SolveService) settleAdmissionFailure(record store.APICall) SolveOutcome
 	if err := store.CompleteAPICallFailure(ctx, s.pool, record.ID, 500, "INTERNAL_ERROR", "Internal server error.", refunded, 0); err != nil {
 		slog.Error("complete admission failure", "request_id", record.RequestID, "error", err)
 	}
-	return SolveOutcome{RequestID: record.RequestID, SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error."}}
+	return SolveOutcome{RequestID: record.RequestID, SolveError: &SolveError{HTTPStatus: 500, Code: "INTERNAL_ERROR", Message: "Internal server error.", Retryable: true}}
 }
 
 // replayOutcome serves stored terminal responses (spec §7.3.2) or flags a
@@ -247,6 +251,7 @@ func (s *SolveService) replayOutcome(existing store.APICall) SolveOutcome {
 			HTTPStatus: existing.HTTPStatus,
 			Code:       derefOr(existing.ErrorCode, "REJECTED"),
 			Message:    derefOr(existing.ErrorSummary, "The original request was rejected."),
+			Retryable:  existing.HTTPStatus == 429,
 		}}
 	case store.CallStatusFailedRefunded:
 		// Solver failures are terminal too: the refund already happened.
@@ -255,6 +260,7 @@ func (s *SolveService) replayOutcome(existing store.APICall) SolveOutcome {
 			HTTPStatus: existing.HTTPStatus,
 			Code:       derefOr(existing.ErrorCode, "UPSTREAM_ERROR"),
 			Message:    derefOr(existing.ErrorSummary, "The original request failed and its quota was refunded."),
+			Retryable:  existing.HTTPStatus >= 500,
 		}}
 	}
 	// RECEIVED/RESERVED/DISPATCHED or unusable payload: still executing.
@@ -281,6 +287,7 @@ func (s *SolveService) reject(ctx context.Context, record store.APICall, httpSta
 			Code:       code,
 			Message:    message,
 			RetryAfter: retryAfter,
+			Retryable:  httpStatus == 429 || httpStatus >= 500,
 		},
 	}
 }
@@ -308,6 +315,7 @@ func (s *SolveService) settleFailureContext(ctx context.Context, record store.AP
 			HTTPStatus: httpStatus,
 			Code:       code,
 			Message:    message,
+			Retryable:  httpStatus >= 500,
 		},
 	}
 }
