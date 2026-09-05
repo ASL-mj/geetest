@@ -18,6 +18,7 @@ const (
 	CallStatusRejected       = "REJECTED"
 	CallStatusReserved       = "RESERVED"
 	CallStatusDispatched     = "DISPATCHED"
+	CallStatusRecovering     = "RECOVERING"
 	CallStatusSucceeded      = "SUCCEEDED"
 	CallStatusFailedRefunded = "FAILED_REFUNDED"
 )
@@ -143,7 +144,7 @@ func CompleteAPICallSuccess(ctx context.Context, q Querier, callID uuid.UUID, du
 	_, err := q.Exec(ctx, `
 		UPDATE api_calls
 		SET status = $2, http_status = 200, completed_at = now(), duration_ms = $3
-		WHERE id = $1
+		WHERE id = $1 AND status IN ('RESERVED', 'DISPATCHED')
 	`, callID, CallStatusSucceeded, duration.Milliseconds())
 	return err
 }
@@ -181,33 +182,53 @@ func CompleteAPICallFailure(ctx context.Context, q Querier, callID uuid.UUID, ht
 		UPDATE api_calls
 		SET status = $2, http_status = $3, error_code = $4, error_summary = $5,
 		    quota_refunded = $6, completed_at = now(), duration_ms = $7
-		WHERE id = $1
+		WHERE id = $1 AND status IN ('RESERVED', 'DISPATCHED')
 	`, callID, CallStatusFailedRefunded, httpStatus, errorCode, errorSummary, refunded, duration.Milliseconds())
 	return err
 }
 
-// SweepStaleInFlightCalls fails calls stuck in RESERVED/DISPATCHED for
-// longer than olderThan (crash recovery): each is refunded exactly once,
-// its per-key admission gate released, and the row finalized. Returns the
-// number of reaped rows.
+// CompleteRecoveredAPICallFailure finalizes a row previously claimed by the
+// crash-recovery worker. Online solver completion cannot overwrite RECOVERING.
+func CompleteRecoveredAPICallFailure(ctx context.Context, q Querier, callID uuid.UUID, httpStatus int, errorCode, errorSummary string, duration time.Duration) error {
+	_, err := q.Exec(ctx, `
+		UPDATE api_calls
+		SET status = $2, http_status = $3, error_code = $4, error_summary = $5,
+		    quota_refunded = true, completed_at = now(), duration_ms = $6
+		WHERE id = $1 AND status = $7
+	`, callID, CallStatusFailedRefunded, httpStatus, errorCode, errorSummary, duration.Milliseconds(), CallStatusRecovering)
+	return err
+}
+
+// SweepStaleInFlightCalls fails calls stuck before solver completion for longer
+// than olderThan (crash recovery). RECEIVED rows are included only when their
+// RESERVE ledger exists: that is the crash window between ReserveQuota's
+// commit and ReserveAPICall's status update. Each row is atomically claimed as
+// RECOVERING before any refund, preventing a concurrent solver completion from
+// being reversed. Plain RECEIVED rows may have never consumed a key or quota
+// and are left alone for normal request cleanup.
 func SweepStaleInFlightCalls(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, cdk_id, user_id, api_key_id, request_id, quota_reserved
-		FROM api_calls
-		WHERE status IN ('RESERVED', 'DISPATCHED') AND accepted_at < now() - make_interval(secs => $1)
+		SELECT a.id
+		FROM api_calls a
+		WHERE (
+			a.status IN ('RESERVED', 'DISPATCHED', 'RECOVERING')
+		   OR (a.status = 'RECEIVED' AND EXISTS (
+				SELECT 1 FROM quota_ledger q
+				WHERE q.api_call_id = a.id AND q.entry_type = 'RESERVE'
+			))
+		)
+		AND a.accepted_at < now() - make_interval(secs => $1)
 	`, olderThan.Seconds())
 	if err != nil {
 		return 0, err
 	}
 	type stale struct {
-		id, cdkID, userID, keyID uuid.UUID
-		requestID                string
-		reserved                 bool
+		id uuid.UUID
 	}
 	var pending []stale
 	for rows.Next() {
 		var call stale
-		if err := rows.Scan(&call.id, &call.cdkID, &call.userID, &call.keyID, &call.requestID, &call.reserved); err != nil {
+		if err := rows.Scan(&call.id); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -220,15 +241,35 @@ func SweepStaleInFlightCalls(ctx context.Context, pool *pgxpool.Pool, olderThan 
 
 	reaped := 0
 	for _, call := range pending {
-		if call.reserved {
-			if err := RefundQuota(ctx, pool, call.cdkID, call.userID, call.id, call.requestID, "stale call sweep refund"); err != nil {
-				return reaped, err
-			}
+		var cdkID, userID, keyID uuid.UUID
+		var requestID string
+		err := pool.QueryRow(ctx, `
+			UPDATE api_calls AS a
+			SET status = $2
+			WHERE a.id = $1
+			  AND a.accepted_at < now() - make_interval(secs => $3)
+			  AND (
+				  a.status IN ('RESERVED', 'DISPATCHED', 'RECOVERING')
+				  OR (a.status = 'RECEIVED' AND EXISTS (
+					  SELECT 1 FROM quota_ledger q
+					  WHERE q.api_call_id = a.id AND q.entry_type = 'RESERVE'
+				  ))
+			  )
+			RETURNING a.cdk_id, a.user_id, a.api_key_id, a.request_id
+		`, call.id, CallStatusRecovering, olderThan.Seconds()).Scan(&cdkID, &userID, &keyID, &requestID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
 		}
-		if call.keyID != uuid.Nil {
-			_ = ReleaseAPIKeyQuota(ctx, pool, call.keyID)
+		if err != nil {
+			return reaped, err
 		}
-		if err := CompleteAPICallFailure(ctx, pool, call.id, http.StatusGatewayTimeout, "SWEEP_TIMEOUT", "Stale in-flight call was reaped and refunded.", call.reserved, 0); err != nil {
+		if err := RefundQuota(ctx, pool, cdkID, userID, call.id, requestID, "stale call sweep refund"); err != nil {
+			return reaped, err
+		}
+		if keyID != uuid.Nil {
+			_ = ReleaseAPIKeyQuota(ctx, pool, keyID)
+		}
+		if err := CompleteRecoveredAPICallFailure(ctx, pool, call.id, http.StatusGatewayTimeout, "SWEEP_TIMEOUT", "Stale in-flight call was reaped and refunded.", 0); err != nil {
 			return reaped, err
 		}
 		reaped++
