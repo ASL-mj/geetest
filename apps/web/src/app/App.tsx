@@ -618,12 +618,10 @@ export function App() {
   // routes manage their own login gate inside AdminPage.
   const [consoleSession, setConsoleSession] = useState<'checking' | 'guest' | 'authenticated'>('checking');
 
-  const isConsoleRoute = route.name === 'console';
-
-  // Probe the session whenever a console route is shown or the session
-  // changes (activation, logout). Guest pages render without probing.
+  // Probe the session on every named route so public headers can offer a
+  // console shortcut too; navigation inside the console (same route name)
+  // does not re-probe.
   useEffect(() => {
-    if (!isConsoleRoute) return;
     let alive = true;
     setConsoleSession('checking');
     void (async () => {
@@ -635,7 +633,7 @@ export function App() {
       }
     })();
     return () => { alive = false; };
-  }, [isConsoleRoute, sessionEpoch]);
+  }, [route.name, sessionEpoch]);
 
   if (route.name === 'activate') {
     return (
@@ -647,7 +645,7 @@ export function App() {
     );
   }
   if (route.name === 'docs') {
-    return <PublicDocs onBack={() => navigate('/')} onStart={() => navigate('/activate')} />;
+    return <PublicDocs onBack={() => navigate('/')} onStart={() => navigate('/activate')} session={consoleSession} onConsole={() => navigate(consolePath('dashboard'))} />;
   }
   if (route.name === 'home') {
     return (
@@ -655,6 +653,8 @@ export function App() {
         onAdmin={() => navigate('/admin')}
         onDocs={() => navigate('/docs')}
         onStart={() => navigate('/activate')}
+        session={consoleSession}
+        onConsole={() => navigate(consolePath('dashboard'))}
       />
     );
   }
@@ -690,7 +690,7 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand__mark"><ShieldCheck aria-hidden="true" size={21} /></span><span>CaptchaFlow<br /><b>Service Platform</b></span></div>
+        <button className="brand" onClick={() => navigate('/')} title="返回首页" type="button"><span className="brand__mark"><ShieldCheck aria-hidden="true" size={21} /></span><span>CaptchaFlow<br /><b>Service Platform</b></span></button>
         <div className="workspace-label">用户控制台</div>
         <nav aria-label="主导航">
           {navigation.map((item) => {

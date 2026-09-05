@@ -96,6 +96,45 @@ describe('App', () => {
     expect(screen.getByLabelText('密码')).toBeInTheDocument();
   });
 
+  it('shows a console shortcut in the public header when a session exists', async () => {
+    accountMock.mockResolvedValue({
+      success: true,
+      request_id: 'req_test',
+      data: {
+        cdk: {
+          code_prefix: 'CAPTCHAD', status: 'ACTIVE', activated_at: null, expires_at: null,
+          quota_total: 100, quota_used: 0, quota_reserved: 0, quota_remaining: 100,
+        },
+      },
+    });
+    render(<App />);
+
+    const consoleButton = await screen.findByRole('button', { name: '控制台' });
+    fireEvent.click(consoleButton);
+    expect(await screen.findByRole('heading', { name: '控制台概览' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/console/dashboard');
+  });
+
+  it('returns home from the console brand button', async () => {
+    accountMock.mockResolvedValue({
+      success: true,
+      request_id: 'req_test',
+      data: {
+        cdk: {
+          code_prefix: 'CAPTCHAD', status: 'ACTIVE', activated_at: null, expires_at: null,
+          quota_total: 100, quota_used: 0, quota_reserved: 0, quota_remaining: 100,
+        },
+      },
+    });
+    window.history.replaceState({}, '', '/console/dashboard');
+    render(<App />);
+
+    await screen.findByRole('heading', { name: '控制台概览' });
+    fireEvent.click(screen.getByRole('button', { name: 'CaptchaFlow Service Platform' }));
+    expect(await screen.findByRole('heading', { name: /把验证码解析/ })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+  });
+
   it('serves console deep links directly when a session cookie is valid', async () => {
     accountMock.mockResolvedValue({
       success: true,
